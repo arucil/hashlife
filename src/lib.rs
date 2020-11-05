@@ -10,7 +10,7 @@ use image::{ImageBuffer, Luma};
 use itertools::Itertools;
 use std::iter;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Node(i64);
 
 pub struct Universe {
@@ -206,42 +206,48 @@ impl Universe {
       if level == 2 {
         self.one_step_level2(n, key)
       } else {
-        let n0 = self.center_subnode(key.nw);
+        let n0 = self.quadrant_center_subnode(key.nw);
         let n1 = self.horizontal_center_subnode(key.nw, key.ne);
-        let n2 = self.center_subnode(key.ne);
-        let n6 = self.center_subnode(key.sw);
+        let n2 = self.quadrant_center_subnode(key.ne);
+        let n3 = self.vertical_center_subnode(key.nw, key.sw);
+        let n4 = self.center_subnode(key.nw, key.ne, key.sw, key.se);
+        let n5 = self.vertical_center_subnode(key.ne, key.se);
+        let n6 = self.quadrant_center_subnode(key.sw);
         let n7 = self.horizontal_center_subnode(key.sw, key.se);
-        let n8 = self.center_subnode(key.se);
+        let n8 = self.quadrant_center_subnode(key.se);
 
-        /*
-        let nw = self.one_step(self.new_node(NodeKey {
+        let nw = self.new_node(NodeKey {
           level: level - 1,
           nw: n0,
           ne: n1,
           sw: n3,
           se: n4,
-        }));
-        let ne = self.one_step(self.new_node(NodeKey {
+        });
+        let nw = self.one_step(nw);
+        let ne = self.new_node(NodeKey {
           level: level - 1,
           nw: n1,
           ne: n2,
           sw: n4,
           se: n5,
-        }));
-        let sw = self.one_step(self.new_node(NodeKey {
+        });
+        let ne = self.one_step(ne);
+        let sw = self.new_node(NodeKey {
           level: level - 1,
           nw: n3,
           ne: n4,
           sw: n6,
           se: n7,
-        }));
-        let se = self.one_step(self.new_node(NodeKey {
+        });
+        let sw = self.one_step(sw);
+        let se = self.new_node(NodeKey {
           level: level - 1,
           nw: n4,
           ne: n5,
           sw: n7,
           se: n8,
-        }));
+        });
+        let se = self.one_step(se);
 
         self.new_node(NodeKey {
           level: level - 1,
@@ -250,13 +256,11 @@ impl Universe {
           sw,
           se,
         })
-        */
-        panic!()
       }
     }
   }
 
-  fn center_subnode(&mut self, Node(n): Node) -> Node {
+  fn quadrant_center_subnode(&mut self, Node(n): Node) -> Node {
     if n < 0 {
       self.empty_subnode(n)
     } else {
@@ -334,6 +338,149 @@ impl Universe {
         let key2 = &self.vec[n2 as usize].key;
         ( self.quadrant(key2.nw, |key| key.sw),
           self.quadrant(key2.sw, |key| key.nw))
+      };
+
+      self.new_node(NodeKey {
+        level: level - 1,
+        nw, ne, sw, se,
+      })
+    }
+  }
+
+  fn center_subnode(
+    &mut self,
+    Node(n1): Node,
+    Node(n2): Node,
+    Node(n3): Node,
+    Node(n4): Node,
+  ) -> Node {
+    if n1 < 0 && n2 < 0 && n3 < 0 && n4 < 0 {
+      self.empty_subnode(n1)
+    } else {
+      let level = if n1 >= 0 {
+        self.vec[n1 as usize].key.level
+      } else if n2 >= 0 {
+        self.vec[n2 as usize].key.level
+      } else if n3 >= 0 {
+        self.vec[n3 as usize].key.level
+      } else {
+        self.vec[n4 as usize].key.level
+      };
+
+      if level == 2 {
+        let nw = if n1 < 0 {
+          0
+        } else {
+          let key1 = &self.vec[n1 as usize].key;
+          !key1.se.0 as u64
+        };
+        let ne = if n2 < 0 {
+          0
+        } else {
+          let key2 = &self.vec[n2 as usize].key;
+          !key2.sw.0 as u64
+        };
+        let sw = if n3 < 0 {
+          0
+        } else {
+          let key3 = &self.vec[n3 as usize].key;
+          !key3.ne.0 as u64
+        };
+        let se = if n4 < 0 {
+          0
+        } else {
+          let key4 = &self.vec[n4 as usize].key;
+          !key4.nw.0 as u64
+        };
+
+        assert!(nw < 16);
+        assert!(ne < 16);
+        assert!(sw < 16);
+        assert!(se < 16);
+
+        let bits = nw >> 3 & 1 | ne >> 1 & 2 | sw << 1 & 4 | se << 3 & 8;
+        return Node(!(bits as i64));
+      }
+
+      let empty = self.new_empty_node(level - 2);
+      let nw = if n1 < 0 {
+        empty
+      } else {
+        let key1 = &self.vec[n1 as usize].key;
+        self.quadrant(key1.se, |key| key.se)
+      };
+      let ne = if n2 < 0 {
+        empty
+      } else {
+        let key2 = &self.vec[n2 as usize].key;
+        self.quadrant(key2.sw, |key| key.sw)
+      };
+      let sw = if n3 < 0 {
+        empty
+      } else {
+        let key3 = &self.vec[n3 as usize].key;
+        self.quadrant(key3.ne, |key| key.ne)
+      };
+      let se = if n4 < 0 {
+        empty
+      } else {
+        let key4 = &self.vec[n4 as usize].key;
+        self.quadrant(key4.nw, |key| key.nw)
+      };
+
+      self.new_node(NodeKey {
+        level: level - 1,
+        nw, ne, sw, se,
+      })
+    }
+  }
+
+  fn vertical_center_subnode(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
+    if n1 < 0 && n2 < 0 {
+      self.empty_subnode(n1)
+    } else {
+      let level = if n1 < 0 {
+        self.vec[n2 as usize].key.level
+      } else {
+        self.vec[n1 as usize].key.level
+      };
+
+      if level == 2 {
+        let (nw, ne) = if n1 < 0 {
+          (0, 0)
+        } else {
+          let key1 = &self.vec[n1 as usize].key;
+          (!key1.sw.0 as u64, !key1.se.0 as u64)
+        };
+        let (sw, se) = if n2 < 0 {
+          (0, 0)
+        } else {
+          let key2 = &self.vec[n2 as usize].key;
+          (!key2.nw.0 as u64, !key2.ne.0 as u64)
+        };
+        assert!(nw < 16);
+        assert!(ne < 16);
+        assert!(sw < 16);
+        assert!(se < 16);
+
+        let bits = nw >> 3 & 1 | ne >> 1 & 2 | sw << 1 & 4 | se << 3 & 8;
+        return Node(!(bits as i64));
+      }
+
+      let empty = self.new_empty_node(level - 2);
+      let (nw, ne) = if n1 < 0 {
+        (empty, empty)
+      } else {
+        let key1 = &self.vec[n1 as usize].key;
+        ( self.quadrant(key1.sw, |key| key.se),
+          self.quadrant(key1.se, |key| key.sw))
+      };
+      let (sw, se) = if n2 < 0 {
+        (empty, empty)
+      } else {
+        let key2 = &self.vec[n2 as usize].key;
+        ( self.quadrant(key2.nw, |key| key.ne),
+          self.quadrant(key2.ne, |key| key.nw))
       };
 
       self.new_node(NodeKey {
@@ -479,34 +626,19 @@ impl Universe {
       let n = !n;
       if n & EMPTY_NODE_MASK != 0 {
         let n = n as u16;
-        let row = iter::repeat('\u{2800}').take(1 << (n - 1)).collect::<String>();
-        iter::repeat(row).take(1 << (n - 2)).join("\n")
+        let row = iter::repeat(' ').take(1 << n).collect::<String>();
+        iter::repeat(row).take(1 << n).join("\n")
       } else {
-        unreachable!()
+        let bits = n as u8;
+        format!("{}{}\n{}{}",
+          if bits & 1 != 0 { '#' } else { ' ' },
+          if bits & 2 != 0 { '#' } else { ' ' },
+          if bits & 4 != 0 { '#' } else { ' ' },
+          if bits & 8 != 0 { '#' } else { ' ' },
+        )
       }
     } else {
       let key = &self.vec[n as usize].key;
-      if key.level == 2 {
-
-        fn bits(Node(n): Node) -> u16 {
-          if !n & EMPTY_NODE_MASK != 0 {
-            0
-          } else {
-            !n as u16
-          }
-        }
-
-        let nw = bits(key.nw);
-        let ne = bits(key.ne);
-        let sw = bits(key.sw);
-        let se = bits(key.se);
-
-        let bits = nw & 0b11 | (ne & 0b11) << 2;
-        let bits = bits | (nw & 0b1100) << 2 | (ne & 0b1100) << 4;
-        let bits = bits | (sw & 0b11) << 8 | (se & 0b11) << 10;
-        let bits = bits | (sw & 0b1100) << 10 | (se & 0b1100) << 12;
-        return format!("{}{}", braille(bits), braille(bits >> 2));
-      }
 
       let nw = self.debug(key.nw);
       let ne = self.debug(key.ne);
@@ -596,28 +728,9 @@ const fn compute_level2_results() -> [u8; 65536] {
   output
 }
 
-fn braille(x: u16) -> char {
-  let x = x as u32;
-  let b0 = x & 1;
-  let b3 = x >> 1 & 1;
-  let b1 = x >> 4 & 1;
-  let b4 = x >> 5 & 1;
-  let b2 = x >> 8 & 1;
-  let b5 = x >> 9 & 1;
-  let b6 = x >> 12 & 1;
-  let b7 = x >> 13 & 1;
-
-  std::char::from_u32(0x2800 + (b0 | b1 << 1 | b2 << 2 | b3 << 3 | b4 << 4 | b5 << 5 | b6 << 6 | b7 << 7)).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn test_braille() {
-    assert_eq!(braille(0b0011_0001_0001_0001), '⣇');
-  }
 
   #[test]
   fn test_debug() {
@@ -625,7 +738,11 @@ mod tests {
     let node = uni.new_empty_node(2);
     let node = uni.set(node, -1, -1);
     let node = uni.set(node, 0, 0);
-    assert_eq!(&uni.debug(node), "⠐⠄");
+    assert_eq!(&uni.debug(node), r"
+    
+ #  
+  # 
+    ".trim_start_matches('\n'));
   }
 
   #[test]
@@ -638,8 +755,14 @@ mod tests {
     let node = uni.set(node, -1, 0);
     let node = uni.set(node, -1, 1);
     assert_eq!(&uni.debug(node), r"
-⠀⢀⡀⠀
-⠀⠙⠀⠀".trim_start());
+        
+        
+        
+   ##   
+  ##    
+   #    
+        
+        ".trim_start_matches('\n'));
   }
 
   #[test]
@@ -668,8 +791,27 @@ mod tests {
     let node = uni.set(node, 1, -2);
     let node = uni.expand(node);
     assert_eq!(&uni.debug(node), r"
-⠀⢄⡠⠀
-⠀⠊⠑⠀".trim_start());
+        
+        
+  #  #  
+   ##   
+   ##   
+  #  #  
+        
+        ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_one_step_level2() {
+    let mut uni = Universe::new();
+    let node = uni.new_empty_node(2);
+    let node = uni.set(node, -1, -1);
+    let node = uni.set(node, 0, -1);
+    let node = uni.set(node, -2, 0);
+    let node = uni.set(node, -1, 0);
+    let node = uni.set(node, -1, 1);
+    let node = uni.one_step(node);
+    assert_eq!(node, Node(!0b11));
   }
 
   #[test]
@@ -683,6 +825,239 @@ mod tests {
     let node = uni.set(node, -1, 1);
     let node = uni.one_step(node);
     assert_eq!(&uni.debug(node), r"
-⣖⠂".trim_start());
+    
+### 
+#   
+##  ".trim_start_matches('\n'));
+
+    let node = uni.expand(node);
+    let node = uni.one_step(node);
+    assert_eq!(&uni.debug(node), r"
+ #  
+##  
+  # 
+##  ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_level2_result() {
+    assert_eq!(LEVEL2_RESULTS[0b0010_0011_0110_0000], 0b11);
+  }
+
+  #[test]
+  fn test_quadrant_center_subnode_level2() {
+    let mut uni = Universe::new();
+    let node = uni.new_empty_node(2);
+    let node = uni.set(node, -1, -1);
+    let node = uni.set(node, 0, -1);
+    let node = uni.set(node, -2, 0);
+    let node = uni.set(node, -1, 0);
+    let node = uni.set(node, -1, 1);
+    let node = uni.quadrant_center_subnode(node);
+    assert_eq!(uni.debug(node), r"
+##
+# ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_quadrant_center_subnode() {
+    let mut uni = Universe::new();
+    let node = uni.new_empty_node(3);
+    let node = uni.set(node, -1, -1);
+    let node = uni.set(node, 0, -1);
+    let node = uni.set(node, -2, 0);
+    let node = uni.set(node, -1, 0);
+    let node = uni.set(node, -1, 1);
+    let node = uni.quadrant_center_subnode(node);
+    assert_eq!(uni.debug(node), r"
+    
+ ## 
+##  
+ #  ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_horizontal_center_subnode_level2() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(2);
+    let node1 = uni.set(node1, -1, -1);
+    let node1 = uni.set(node1, 1, -1);
+    let node1 = uni.set(node1, -2, 0);
+    let node1 = uni.set(node1, -1, 0);
+    let node1 = uni.set(node1, -1, 1);
+
+    let node2 = uni.new_empty_node(2);
+    let node2 = uni.set(node2, -1, -1);
+    let node2 = uni.set(node2, 0, -1);
+    let node2 = uni.set(node2, -2, 0);
+    let node2 = uni.set(node2, -1, 0);
+    let node2 = uni.set(node2, -1, 1);
+    let node2 = uni.set(node2, -2, -1);
+
+    let node = uni.horizontal_center_subnode(node1, node2);
+
+    assert_eq!(uni.debug(node), r"
+##
+ #".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_horizontal_center_subnode() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(3);
+    let node1 = uni.set(node1, 0, -4);
+    let node1 = uni.set(node1, 1, -3);
+    let node1 = uni.set(node1, 2, -2);
+    let node1 = uni.set(node1, 3, -1);
+    let node1 = uni.set(node1, 3, 0);
+    let node1 = uni.set(node1, 2, 1);
+    let node1 = uni.set(node1, 1, 2);
+    let node1 = uni.set(node1, 0, 3);
+
+    let node2 = uni.new_empty_node(3);
+    let node2 = uni.set(node2, -4, -1);
+    let node2 = uni.set(node2, -3, -2);
+    let node2 = uni.set(node2, -2, -3);
+    let node2 = uni.set(node2, -1, -4);
+    let node2 = uni.set(node2, -4, 0);
+    let node2 = uni.set(node2, -3, 1);
+    let node2 = uni.set(node2, -2, 2);
+    let node2 = uni.set(node2, -1, 3);
+
+    let node = uni.horizontal_center_subnode(node1, node2);
+
+    assert_eq!(uni.debug(node), r"
+#  #
+ ## 
+ ## 
+#  #".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_vertical_center_subnode_level2() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(2);
+    let node1 = uni.set(node1, -1, -1);
+    let node1 = uni.set(node1, 1, -1);
+    let node1 = uni.set(node1, -2, 0);
+    let node1 = uni.set(node1, -1, 0);
+    let node1 = uni.set(node1, -1, 1);
+
+    let node2 = uni.new_empty_node(2);
+    let node2 = uni.set(node2, -1, -1);
+    let node2 = uni.set(node2, 0, -1);
+    let node2 = uni.set(node2, -2, 0);
+    let node2 = uni.set(node2, -1, 0);
+    let node2 = uni.set(node2, -1, 1);
+    let node2 = uni.set(node2, -2, -1);
+    let node2 = uni.set(node2, 0, -2);
+
+    let node = uni.vertical_center_subnode(node1, node2);
+
+    assert_eq!(uni.debug(node), r"
+# 
+ #".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_vertical_center_subnode() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(3);
+    let node1 = uni.set(node1, -4, 0);
+    let node1 = uni.set(node1, -3, 1);
+    let node1 = uni.set(node1, -2, 2);
+    let node1 = uni.set(node1, -1, 3);
+    let node1 = uni.set(node1, 0, 3);
+    let node1 = uni.set(node1, 1, 2);
+    let node1 = uni.set(node1, 2, 1);
+    let node1 = uni.set(node1, 3, 0);
+
+    let node2 = uni.new_empty_node(3);
+    let node2 = uni.set(node2, -4, -1);
+    let node2 = uni.set(node2, -3, -2);
+    let node2 = uni.set(node2, -2, -3);
+    let node2 = uni.set(node2, -1, -4);
+    let node2 = uni.set(node2, 0, -4);
+    let node2 = uni.set(node2, 1, -3);
+    let node2 = uni.set(node2, 2, -2);
+    let node2 = uni.set(node2, 3, -1);
+
+    let node = uni.vertical_center_subnode(node1, node2);
+
+    assert_eq!(uni.debug(node), r"
+#  #
+ ## 
+ ## 
+#  #".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_center_subnode_level2() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(2);
+    let node1 = uni.set(node1, -1, -1);
+    let node1 = uni.set(node1, 0, 0);
+    let node1 = uni.set(node1, 1, 1);
+
+    let node2 = uni.new_empty_node(2);
+    let node2 = uni.set(node2, 0, -1);
+    let node2 = uni.set(node2, -1, 0);
+    let node2 = uni.set(node2, -2, 1);
+
+    let node3 = uni.new_empty_node(2);
+    let node3 = uni.set(node3, 1, -2);
+    let node3 = uni.set(node3, 0, -1);
+    let node3 = uni.set(node3, -1, 0);
+
+    let node4 = uni.new_empty_node(2);
+    let node4 = uni.set(node4, -1, -1);
+    let node4 = uni.set(node4, 0, 0);
+
+    let node = uni.center_subnode(node1, node2, node3, node4);
+
+    assert_eq!(uni.debug(node), r"
+##
+# ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_center_subnode() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(3);
+    let node1 = uni.set(node1, 0, 0);
+    let node1 = uni.set(node1, 1, 1);
+    let node1 = uni.set(node1, 2, 2);
+    let node1 = uni.set(node1, 3, 3);
+
+    let node2 = uni.new_empty_node(3);
+    let node2 = uni.set(node2, -4, 3);
+    let node2 = uni.set(node2, -3, 2);
+    let node2 = uni.set(node2, -2, 1);
+    let node2 = uni.set(node2, -1, 0);
+
+    let node3 = uni.new_empty_node(3);
+    let node3 = uni.set(node3, 1, -2);
+    let node3 = uni.set(node3, 2, -3);
+    let node3 = uni.set(node3, 3, -4);
+
+    let node4 = uni.new_empty_node(3);
+    let node4 = uni.set(node4, -4, -4);
+    let node4 = uni.set(node4, -3, -4);
+    let node4 = uni.set(node4, -4, -3);
+    let node4 = uni.set(node4, -2, -2);
+
+    let node = uni.center_subnode(node1, node2, node3, node4);
+
+    assert_eq!(uni.debug(node), r"
+#  #
+ ## 
+ ###
+# # ".trim_start_matches('\n'));
   }
 }
