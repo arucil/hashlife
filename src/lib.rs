@@ -32,6 +32,7 @@ pub struct NodeKey {
 #[derive(Clone)]
 struct NodeValue {
   key: NodeKey,
+  /// The memoized result of a bit step (`2 ^ (level - 2)` steps).
   result: Option<Node>,
 }
 
@@ -61,13 +62,21 @@ impl Universe {
   }
 
   pub fn new_node(&mut self, key: NodeKey) -> Node {
-    if key.nw.0 < 0 && !key.nw.0 & EMPTY_NODE_MASK != 0 &&
-      key.ne.0 < 0 && !key.ne.0 & EMPTY_NODE_MASK != 0 &&
-      key.sw.0 < 0 && !key.sw.0 & EMPTY_NODE_MASK != 0 &&
-      key.se.0 < 0 && !key.se.0 & EMPTY_NODE_MASK != 0
-    {
-      let level = !key.nw.0 as u16;
-      return self.new_empty_node(level + 1);
+    if key.nw.0 < 0 && key.ne.0 < 0 && key.sw.0 < 0 && key.se.0 < 0 {
+      if !key.nw.0 & EMPTY_NODE_MASK != 0 &&
+        !key.ne.0 & EMPTY_NODE_MASK != 0 &&
+        !key.sw.0 & EMPTY_NODE_MASK != 0 &&
+        !key.se.0 & EMPTY_NODE_MASK != 0
+      {
+        let level = !key.nw.0 as u16;
+        return self.new_empty_node(level + 1);
+      } else if !key.nw.0 == 0 &&
+        !key.ne.0 == 0 &&
+        !key.sw.0 == 0 &&
+        !key.se.0 == 0
+      {
+        return self.new_empty_node(2);
+      }
     }
 
     let counter = self.counter;
@@ -197,10 +206,6 @@ impl Universe {
     if n < 0 {
       self.empty_subnode(n)
     } else {
-      if let Some(result) = self.vec[n as usize].result {
-        return result;
-      }
-
       let key = self.vec[n as usize].key.clone();
       let level = key.level;
       if level == 2 {
@@ -256,6 +261,85 @@ impl Universe {
           sw,
           se,
         })
+      }
+    }
+  }
+
+  pub fn mem(&self) -> usize {
+    self.map.len()
+  }
+
+  /// `2 ^ (level - 2)` steps.
+  pub fn big_step(&mut self, Node(n): Node) -> Node {
+    if n < 0 {
+      self.empty_subnode(n)
+    } else {
+      if let Some(result) = self.vec[n as usize].result {
+        return result;
+      }
+
+      let key = self.vec[n as usize].key.clone();
+      let level = key.level;
+      if level == 2 {
+        self.one_step_level2(n, key)
+      } else {
+        let n0 = self.big_step(key.nw);
+        let n1 = self.horizontal_center_node(key.nw, key.ne);
+        let n1 = self.big_step(n1);
+        let n2 = self.big_step(key.ne);
+        let n3 = self.vertical_center_node(key.nw, key.sw);
+        let n3 = self.big_step(n3);
+        let n4 = self.center_node(key.nw, key.ne, key.sw, key.se);
+        let n4 = self.big_step(n4);
+        let n5 = self.vertical_center_node(key.ne, key.se);
+        let n5 = self.big_step(n5);
+        let n6 = self.big_step(key.sw);
+        let n7 = self.horizontal_center_node(key.sw, key.se);
+        let n7 = self.big_step(n7);
+        let n8 = self.big_step(key.se);
+
+        let nw = self.new_node(NodeKey {
+          level: level - 1,
+          nw: n0,
+          ne: n1,
+          sw: n3,
+          se: n4,
+        });
+        let nw = self.big_step(nw);
+        let ne = self.new_node(NodeKey {
+          level: level - 1,
+          nw: n1,
+          ne: n2,
+          sw: n4,
+          se: n5,
+        });
+        let ne = self.big_step(ne);
+        let sw = self.new_node(NodeKey {
+          level: level - 1,
+          nw: n3,
+          ne: n4,
+          sw: n6,
+          se: n7,
+        });
+        let sw = self.big_step(sw);
+        let se = self.new_node(NodeKey {
+          level: level - 1,
+          nw: n4,
+          ne: n5,
+          sw: n7,
+          se: n8,
+        });
+        let se = self.big_step(se);
+
+        let result = self.new_node(NodeKey {
+          level: level - 1,
+          nw,
+          ne,
+          sw,
+          se,
+        });
+        self.vec[n as usize].result = Some(result);
+        result
       }
     }
   }
@@ -490,6 +574,82 @@ impl Universe {
     }
   }
 
+  fn horizontal_center_node(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
+    if n1 < 0 && n2 < 0 {
+      return Node(n1)
+    } else {
+      let level = if n1 < 0 {
+        self.vec[n2 as usize].key.level
+      } else {
+        self.vec[n1 as usize].key.level
+      };
+
+      let nw = self.quadrant(Node(n1), |key| key.ne);
+      let sw = self.quadrant(Node(n1), |key| key.se);
+      let ne = self.quadrant(Node(n2), |key| key.nw);
+      let se = self.quadrant(Node(n2), |key| key.sw);
+
+      return self.new_node(NodeKey {
+        level,
+        nw, ne, sw, se,
+      });
+    }
+  }
+
+  fn vertical_center_node(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
+    if n1 < 0 && n2 < 0 {
+      return Node(n1)
+    } else {
+      let level = if n1 < 0 {
+        self.vec[n2 as usize].key.level
+      } else {
+        self.vec[n1 as usize].key.level
+      };
+
+      let nw = self.quadrant(Node(n1), |key| key.sw);
+      let ne = self.quadrant(Node(n1), |key| key.se);
+      let sw = self.quadrant(Node(n2), |key| key.nw);
+      let se = self.quadrant(Node(n2), |key| key.ne);
+
+      return self.new_node(NodeKey {
+        level,
+        nw, ne, sw, se,
+      });
+    }
+  }
+
+  fn center_node(
+    &mut self,
+    Node(n1): Node,
+    Node(n2): Node,
+    Node(n3): Node,
+    Node(n4): Node,
+  ) -> Node {
+    if n1 < 0 && n2 < 0 && n3 < 0 && n4 < 0 {
+      return Node(n1)
+    } else {
+      let level = if n1 >= 0 {
+        self.vec[n1 as usize].key.level
+      } else if n2 >= 0 {
+        self.vec[n2 as usize].key.level
+      } else if n3 >= 0 {
+        self.vec[n3 as usize].key.level
+      } else {
+        self.vec[n4 as usize].key.level
+      };
+
+      let nw = self.quadrant(Node(n1), |key| key.se);
+      let ne = self.quadrant(Node(n2), |key| key.sw);
+      let sw = self.quadrant(Node(n3), |key| key.ne);
+      let se = self.quadrant(Node(n4), |key| key.nw);
+
+      return self.new_node(NodeKey {
+        level,
+        nw, ne, sw, se,
+      });
+    }
+  }
+
   fn quadrant<F>(
     &self,
     Node(n): Node,
@@ -572,17 +732,14 @@ impl Universe {
   }
 
   pub fn save_image(&self, node: Node, path: impl AsRef<Path>) {
-    let (x0, y0, x1, y1) = self.boundary(node, 0, 0);
+    let b@(x0, y0, x1, y1) = self.boundary(node, 0, 0);
     if x1 <= x0 {
       panic!("empty");
     }
 
     let mut buffer = ImageBuffer::new((x1 - x0) as u32, (y1 - y0) as u32);
-    self.write_cells(node, 0, 0, &mut |x, y| {
-      if x < x0 || x >= x1 || y < y0 || y >= y1 {
-        return;
-      }
-
+    self.write_cells(node, 0, 0, b, &mut |x, y| {
+      assert!(x >= x0 && x < x1 && y >= y0 && y < y1);
       buffer.put_pixel((x - x0) as u32, (y - y0) as u32, Luma([255u8]));
     });
 
@@ -594,6 +751,7 @@ impl Universe {
     Node(n): Node,
     center_x: i32,
     center_y: i32,
+    boundary: Boundary,
     f: &mut F,
   )
   where
@@ -603,21 +761,39 @@ impl Universe {
       let n = !n;
       if n & EMPTY_NODE_MASK == 0 {
         let bits = n as u16;
-        for y in 0..2 {
-          for x in 0..2 {
-            if bits & 1 << (y * 2 + x) != 0 {
-              f(center_x + x - 1, center_y + y - 1);
-            }
-          }
+        if bits & 1 != 0 {
+          f(center_x - 1, center_y - 1)
+        }
+        if bits & 2 != 0 {
+          f(center_x, center_y - 1)
+        }
+        if bits & 4 != 0 {
+          f(center_x - 1, center_y)
+        }
+        if bits & 8 != 0 {
+          f(center_x, center_y)
         }
       }
     } else {
       let key = &self.vec[n as usize].key;
+      let radius = 1 << (key.level - 1);
+      if center_x + radius <= boundary.0 ||
+        center_x - radius >= boundary.2 ||
+        center_y + radius <= boundary.1 ||
+        center_y - radius >= boundary.3
+      {
+        return;
+      }
+
       let sub_radius = 1 << (key.level - 2);
-      self.write_cells(key.nw, center_x - sub_radius, center_y - sub_radius, f);
-      self.write_cells(key.ne, center_x + sub_radius, center_y - sub_radius, f);
-      self.write_cells(key.sw, center_x - sub_radius, center_y + sub_radius, f);
-      self.write_cells(key.se, center_x + sub_radius, center_y + sub_radius, f);
+      self.write_cells(key.nw,
+        center_x - sub_radius, center_y - sub_radius, boundary, f);
+      self.write_cells(key.ne,
+        center_x + sub_radius, center_y - sub_radius, boundary, f);
+      self.write_cells(key.sw,
+        center_x - sub_radius, center_y + sub_radius, boundary, f);
+      self.write_cells(key.se,
+        center_x + sub_radius, center_y + sub_radius, boundary, f);
     }
   }
 
@@ -1059,5 +1235,140 @@ mod tests {
  ## 
  ###
 # # ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_horizontal_center_node() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(2);
+    let node1 = uni.set(node1, -2, -2);
+    let node1 = uni.set(node1, -1, -1);
+    let node1 = uni.set(node1, 0, 0);
+    let node1 = uni.set(node1, 1, 1);
+    let node1 = uni.set(node1, 1, -2);
+    let node1 = uni.set(node1, 0, -1);
+    let node1 = uni.set(node1, -1, 0);
+    let node1 = uni.set(node1, -2, 1);
+
+    let node2 = uni.new_empty_node(2);
+    let node2 = uni.set(node2, -2, -2);
+    let node2 = uni.set(node2, -1, -1);
+    let node2 = uni.set(node2, 0, 0);
+    let node2 = uni.set(node2, 1, 1);
+    let node2 = uni.set(node2, 1, -2);
+    let node2 = uni.set(node2, 0, -1);
+    let node2 = uni.set(node2, -1, 0);
+    let node2 = uni.set(node2, -2, 1);
+    let node2 = uni.set(node2, -1, -2);
+
+    let node = uni.horizontal_center_node(node1, node2);
+
+    assert_eq!(uni.debug(node), r"
+ ###
+#  #
+#  #
+ ## ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_vertical_center_node() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(2);
+    let node1 = uni.set(node1, -2, -2);
+    let node1 = uni.set(node1, -1, -1);
+    let node1 = uni.set(node1, 0, 0);
+    let node1 = uni.set(node1, 1, 1);
+    let node1 = uni.set(node1, 1, -2);
+    let node1 = uni.set(node1, 0, -1);
+    let node1 = uni.set(node1, -1, 0);
+    let node1 = uni.set(node1, -2, 1);
+
+    let node2 = uni.new_empty_node(2);
+    let node2 = uni.set(node2, -2, -2);
+    let node2 = uni.set(node2, -1, -1);
+    let node2 = uni.set(node2, 0, 0);
+    let node2 = uni.set(node2, 1, 1);
+    let node2 = uni.set(node2, 1, -2);
+    let node2 = uni.set(node2, 0, -1);
+    let node2 = uni.set(node2, -1, 0);
+    let node2 = uni.set(node2, -2, 1);
+    let node2 = uni.set(node2, -1, -2);
+
+    let node = uni.vertical_center_node(node1, node2);
+
+    assert_eq!(uni.debug(node), r"
+ ## 
+#  #
+## #
+ ## ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_center_node() {
+    let mut uni = Universe::new();
+
+    let node1 = uni.new_empty_node(2);
+    let node1 = uni.set(node1, 0, 0);
+    let node1 = uni.set(node1, 1, 1);
+
+    let node2 = uni.new_empty_node(2);
+    let node2 = uni.set(node2, -2, 1);
+    let node2 = uni.set(node2, -1, 0);
+
+    let node3 = uni.new_empty_node(2);
+    let node3 = uni.set(node3, 0, -1);
+    let node3 = uni.set(node3, 1, -2);
+
+    let node4 = uni.new_empty_node(2);
+    let node4 = uni.set(node4, -2, -2);
+    let node4 = uni.set(node4, -1, -1);
+
+    let node = uni.center_node(node1, node2, node3, node4);
+
+    assert_eq!(uni.debug(node), r"
+#  #
+ ## 
+ ## 
+#  #".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_big_step_level3() {
+    let mut uni = Universe::new();
+    let node = uni.new_empty_node(3);
+    let node = uni.set(node, -1, -1);
+    let node = uni.set(node, 0, -1);
+    let node = uni.set(node, -2, 0);
+    let node = uni.set(node, -1, 0);
+    let node = uni.set(node, -1, 1);
+    let node = uni.big_step(node);
+    assert_eq!(&uni.debug(node), r"
+ #  
+##  
+  # 
+##  ".trim_start_matches('\n'));
+  }
+
+  #[test]
+  fn test_big_step_level4() {
+    let mut uni = Universe::new();
+    let node = uni.new_empty_node(4);
+    let node = uni.set(node, -1, -1);
+    let node = uni.set(node, 0, -1);
+    let node = uni.set(node, -2, 0);
+    let node = uni.set(node, -1, 0);
+    let node = uni.set(node, -1, 1);
+    let node = uni.big_step(node);
+    assert_eq!(&uni.debug(node), r"
+        
+        
+  # #   
+ #  #   
+ #  #   
+  ##    
+        
+        ".trim_start_matches('\n'));
   }
 }
