@@ -1,14 +1,13 @@
-use hashlife::*;
+use std::fs;
+use hashlife::universe::*;
+use hashlife::rle;
 
 fn main() {
-
     let mut uni = Universe::new();
-    let mut node = uni.new_empty_node(30);
-    for i in 0..81 {
-        node = uni.set(node, 0, i);
-    }
-    node = uni.big_step(node);
-    println!("{}", uni.mem());
+    let src = fs::read_to_string("Breeder.lif").unwrap();
+    let node = rle::read(src, &mut uni);
+
+    let node = uni.simulate(node, 1000);
 
     uni.save_image(node, "suck.bmp");
 }
