@@ -72,6 +72,112 @@ pub fn read(
   node
 }
 
+/// Write a Life pattern to a RLE string.
+///
+/// RLE format: <https://www.conwaylife.com/wiki/Run_Length_Encoded>.
+pub fn write(
+  univ: &Universe,
+  node: Node,
+) -> String {
+  let (x0, y0, x1, y1) = univ.boundary(node, 0, 0);
+  let width = (x1 - x0) as u32;
+  let mut output = format!("x = {}, y = {}, rule = B3/S23\n", width, y1 - y0);
+  let data = crate::export::save_buffer(univ, node);
+
+  let mut num_consec_next_rows = 0;
+  for row in data {
+    let mut unit = None;
+    let mut num_unit = 0;
+    let mut row_left_bits = width;
+    for mut x in row {
+      let mut left_bits = 32;
+      while left_bits != 0 && row_left_bits != 0 {
+        let num_new_unit;
+        let new_unit = if x & 1 == 0 {
+          num_new_unit = x.trailing_zeros().min(left_bits).min(row_left_bits);
+          RleUnit::Dead
+        } else {
+          num_new_unit = x.trailing_ones();
+          RleUnit::Alive
+        };
+        left_bits -= num_new_unit;
+        row_left_bits -= num_new_unit;
+        if num_new_unit == 32 {
+          x = 0;
+        } else {
+          x >>= num_new_unit;
+        }
+
+        if Some(new_unit) != unit {
+          if let Some(unit) = unit.take() {
+            if num_consec_next_rows > 0 {
+              RleUnit::NextRow.write(num_consec_next_rows, &mut output);
+              num_consec_next_rows = 0;
+            }
+
+            unit.write(num_unit, &mut output);
+            num_unit = 0;
+          }
+          unit = Some(new_unit);
+        }
+        num_unit += num_new_unit;
+      }
+    }
+
+    if unit == Some(RleUnit::Dead) && num_unit == width {
+      num_consec_next_rows += 1;
+    } else {
+      if num_consec_next_rows > 0 {
+        RleUnit::NextRow.write(num_consec_next_rows, &mut output);
+      }
+
+      let unit = unit.unwrap();
+      if unit != RleUnit::Dead {
+        unit.write(num_unit, &mut output);
+      }
+
+      num_consec_next_rows = 1;
+    }
+  }
+
+  if num_consec_next_rows > 1 {
+    RleUnit::NextRow.write(num_consec_next_rows - 1, &mut output);
+  }
+
+  output.push('!');
+  output.push('\n');
+  output
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RleUnit {
+  Dead,
+  Alive,
+  NextRow,
+}
+
+impl RleUnit {
+  fn write(&self, num: u32, s: &mut String) {
+    let c = match self {
+      Self::Dead => 'b',
+      Self::Alive => 'o',
+      Self::NextRow => '$',
+    };
+
+    let buf = if num == 1 {
+      c.to_string()
+    } else {
+      format!("{}{}", num, c)
+    };
+
+    if s.len() - s.rfind('\n').unwrap() + buf.len() > 71 {
+      s.push('\n');
+    }
+
+    s.push_str(&buf);
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use crate::universe::*;

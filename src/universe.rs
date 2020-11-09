@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::path::Path;
 use std::i32;
-use image::{ImageBuffer, Luma};
 use itertools::Itertools;
 use std::iter;
 
@@ -512,36 +510,6 @@ impl Universe {
     }
   }
 
-  pub fn save_image(&self, node: Node, path: impl AsRef<Path>) {
-    let b@(x0, y0, x1, y1) = self.boundary(node, 0, 0);
-    if x1 <= x0 {
-      panic!("empty");
-    }
-
-    let mut buffer = ImageBuffer::new((x1 - x0) as u32, (y1 - y0) as u32);
-    self.write_cells(node, 0, 0, b, &mut |x, y| {
-      assert!(x >= x0 && x < x1 && y >= y0 && y < y1);
-      buffer.put_pixel((x - x0) as u32, (y - y0) as u32, Luma([255u8]));
-    });
-
-    buffer.save(path).unwrap();
-  }
-
-  pub fn save_buffer(&self, node: Node) -> Vec<Vec<u32>> {
-    let b@(x0, y0, x1, y1) = self.boundary(node, 0, 0);
-    if x1 <= x0 {
-      panic!("empty");
-    }
-
-    let mut buffer = vec![vec![0; (x1 - x0) as usize / 32]; (y1 - y0) as usize];
-    self.write_cells(node, 0, 0, b, &mut |x, y| {
-      assert!(x >= x0 && x < x1 && y >= y0 && y < y1);
-      //buffer.put_pixel((x - x0) as u32, (y - y0) as u32, Luma([255u8]));
-    });
-
-    buffer
-  }
-
   pub fn write_cells<F>(
     &self,
     Node(n): Node,
@@ -983,13 +951,21 @@ mod tests {
     let node = uni.set(node, -1, 1);
     let node = uni.simulate(node, 7);
     assert_eq!(&uni.debug(node), r"
-        
-   #    
- ## ##  
- #      
- #   #  
-  ###   
-        
-        ".trim_start_matches('\n'));
+                
+                
+                
+                
+                
+       #        
+     ## ##      
+     #          
+     #   #      
+      ###       
+                
+                
+                
+                
+                
+                ".trim_start_matches('\n'));
   }
 }
