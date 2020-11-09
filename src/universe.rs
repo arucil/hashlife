@@ -27,8 +27,6 @@ pub struct Universe {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct NodeKey {
-  /// `level` >= 2
-  level: u16,
   nw: Node,
   ne: Node,
   sw: Node,
@@ -38,6 +36,10 @@ pub struct NodeKey {
 #[derive(Clone)]
 struct NodeValue {
   key: NodeKey,
+
+  /// `level` >= 2
+  level: u16,
+
   /// The memoized results of `2 ^ k` steps, where `k` is the key of the `HashMap`.
   ///
   /// Maximal `k` is `level - 2`.
@@ -93,7 +95,7 @@ impl Universe {
         1
       }
     } else {
-      self.vec[n as usize].key.level
+      self.vec[n as usize].level
     }
   }
 
@@ -111,7 +113,7 @@ impl Universe {
     }
   }
 
-  pub fn new_node(&mut self, key: NodeKey) -> Node {
+  pub fn new_node(&mut self, level: u16, key: NodeKey) -> Node {
     if key.nw.0 < 0 && key.ne.0 < 0 && key.sw.0 < 0 && key.se.0 < 0 {
       if !key.nw.0 & EMPTY_NODE_MASK != 0 &&
         !key.ne.0 & EMPTY_NODE_MASK != 0 &&
@@ -135,6 +137,7 @@ impl Universe {
       self.counter += 1;
       self.vec.push(NodeValue {
         key,
+        level,
         results: HashMap::new(),
       })
     }
@@ -143,27 +146,27 @@ impl Universe {
 
   /// `(x, y)` are coordinate relative to center of the node.
   pub fn set(&mut self, Node(n): Node, x: i32, y: i32) -> Node {
-    let old_key = if n < 0 {
+    let (old_key, level) = if n < 0 {
       let n = !n;
       if n & EMPTY_NODE_MASK != 0 {
         let level = n as u16;
         let sub_empty = self.new_empty_node(level - 1);
-        NodeKey {
-          level,
+        (NodeKey {
           nw: sub_empty,
           ne: sub_empty,
           sw: sub_empty,
           se: sub_empty,
-        }
+        }, level)
       } else {
         assert!(x >= -1 && x < 1 && y >= -1 && y < 1);
         return Node(!(n | 1 << (x + 1 + (y + 1) * 2)));
       }
     } else {
-      self.vec[n as usize].key.clone()
+      let n = n as usize;
+      (self.vec[n].key.clone(), self.vec[n].level)
     };
 
-    let radius = 1 << (old_key.level - 1);
+    let radius = 1 << (level - 1);
     let sub_radius = radius >> 1;
     assert!(x >= -radius && x < radius && y >= -radius && y < radius);
 
@@ -193,7 +196,7 @@ impl Universe {
       }
     };
 
-    self.new_node(new_key)
+    self.new_node(level, new_key)
   }
 
   pub fn expand(&mut self, Node(n): Node) -> Node {
@@ -208,45 +211,39 @@ impl Universe {
         let ne = Node(!((bits & 0b0010) << 1));
         let sw = Node(!((bits & 0b0100) >> 1));
         let se = Node(!((bits & 0b1000) >> 3));
-        self.new_node(NodeKey {
-          level: 2,
+        self.new_node(2, NodeKey {
           nw, ne, sw, se,
         })
       }
     } else {
       let key = self.vec[n as usize].key.clone();
-      let level = key.level;
+      let level = self.vec[n as usize].level;
       let empty = self.new_empty_node(level - 1);
-      let nw = self.new_node(NodeKey {
-        level,
+      let nw = self.new_node(level, NodeKey {
         nw: empty,
         ne: empty,
         sw: empty,
         se: key.nw,
       });
-      let ne = self.new_node(NodeKey {
-        level,
+      let ne = self.new_node(level, NodeKey {
         nw: empty,
         ne: empty,
         sw: key.ne,
         se: empty,
       });
-      let sw = self.new_node(NodeKey {
-        level,
+      let sw = self.new_node(level, NodeKey {
         nw: empty,
         ne: key.sw,
         sw: empty,
         se: empty,
       });
-      let se = self.new_node(NodeKey {
-        level,
+      let se = self.new_node(level, NodeKey {
         nw: key.se,
         ne: empty,
         sw: empty,
         se: empty,
       });
-      self.new_node(NodeKey {
-        level: key.level + 1,
+      self.new_node(level + 1, NodeKey {
         nw, ne, sw, se,
       })
     }
@@ -262,7 +259,7 @@ impl Universe {
       self.empty_subnode(n)
     } else {
       let value = &self.vec[n as usize];
-      let level = value.key.level;
+      let level = value.level;
       let k = k.min(level - 2);
       if let Some(&result) = value.results.get(&k) {
         return result;
@@ -292,29 +289,25 @@ impl Universe {
         let mut sw;
         let mut se;
         if k == level - 2 {
-          nw = self.new_node(NodeKey {
-            level: level - 1,
+          nw = self.new_node(level - 1, NodeKey {
             nw: n0,
             ne: n1,
             sw: n3,
             se: n4,
           });
-          ne = self.new_node(NodeKey {
-            level: level - 1,
+          ne = self.new_node(level - 1, NodeKey {
             nw: n1,
             ne: n2,
             sw: n4,
             se: n5,
           });
-          sw = self.new_node(NodeKey {
-            level: level - 1,
+          sw = self.new_node(level - 1, NodeKey {
             nw: n3,
             ne: n4,
             sw: n6,
             se: n7,
           });
-          se = self.new_node(NodeKey {
-            level: level - 1,
+          se = self.new_node(level - 1, NodeKey {
             nw: n4,
             ne: n5,
             sw: n7,
@@ -331,8 +324,7 @@ impl Universe {
           se = self.center_node(n4, n5, n7, n8);
         }
 
-        let result = self.new_node(NodeKey {
-          level: level - 1,
+        let result = self.new_node(level - 1, NodeKey {
           nw, ne, sw, se,
         });
         self.vec[n as usize].results.insert(k, result);
@@ -346,9 +338,9 @@ impl Universe {
       return Node(n1)
     } else {
       let level = if n1 < 0 {
-        self.vec[n2 as usize].key.level
+        self.vec[n2 as usize].level
       } else {
-        self.vec[n1 as usize].key.level
+        self.vec[n1 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.ne);
@@ -356,8 +348,7 @@ impl Universe {
       let ne = self.quadrant(Node(n2), |key| key.nw);
       let se = self.quadrant(Node(n2), |key| key.sw);
 
-      return self.new_node(NodeKey {
-        level,
+      return self.new_node(level, NodeKey {
         nw, ne, sw, se,
       });
     }
@@ -368,9 +359,9 @@ impl Universe {
       return Node(n1)
     } else {
       let level = if n1 < 0 {
-        self.vec[n2 as usize].key.level
+        self.vec[n2 as usize].level
       } else {
-        self.vec[n1 as usize].key.level
+        self.vec[n1 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.sw);
@@ -378,8 +369,7 @@ impl Universe {
       let sw = self.quadrant(Node(n2), |key| key.nw);
       let se = self.quadrant(Node(n2), |key| key.ne);
 
-      return self.new_node(NodeKey {
-        level,
+      return self.new_node(level, NodeKey {
         nw, ne, sw, se,
       });
     }
@@ -408,13 +398,13 @@ impl Universe {
       }
     } else {
       let level = if n1 >= 0 {
-        self.vec[n1 as usize].key.level
+        self.vec[n1 as usize].level
       } else if n2 >= 0 {
-        self.vec[n2 as usize].key.level
+        self.vec[n2 as usize].level
       } else if n3 >= 0 {
-        self.vec[n3 as usize].key.level
+        self.vec[n3 as usize].level
       } else {
-        self.vec[n4 as usize].key.level
+        self.vec[n4 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.se);
@@ -422,8 +412,7 @@ impl Universe {
       let sw = self.quadrant(Node(n3), |key| key.ne);
       let se = self.quadrant(Node(n4), |key| key.nw);
 
-      return self.new_node(NodeKey {
-        level,
+      return self.new_node(level, NodeKey {
         nw, ne, sw, se,
       });
     }
@@ -491,7 +480,8 @@ impl Universe {
       }
     } else {
       let key = &self.vec[n as usize].key;
-      let sub_radius = 1 << (key.level - 2);
+      let level = self.vec[n as usize].level;
+      let sub_radius = 1 << (level - 2);
       let nw_bound = self.boundary(key.nw,
         center_x - sub_radius, center_y - sub_radius);
       let ne_bound = self.boundary(key.ne,
@@ -540,7 +530,8 @@ impl Universe {
       }
     } else {
       let key = &self.vec[n as usize].key;
-      let radius = 1 << (key.level - 1);
+      let level = self.vec[n as usize].level;
+      let radius = 1 << (level - 1);
       if center_x + radius <= boundary.0 ||
         center_x - radius >= boundary.2 ||
         center_y + radius <= boundary.1 ||
@@ -549,7 +540,7 @@ impl Universe {
         return;
       }
 
-      let sub_radius = 1 << (key.level - 2);
+      let sub_radius = 1 << (level - 2);
       self.write_cells(key.nw,
         center_x - sub_radius, center_y - sub_radius, boundary, f);
       self.write_cells(key.ne,
