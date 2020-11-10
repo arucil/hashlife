@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::i32;
 use itertools::Itertools;
 use std::iter;
 
@@ -145,7 +144,7 @@ impl Universe {
   }
 
   /// `(x, y)` are coordinate relative to center of the node.
-  pub fn set(&mut self, Node(n): Node, x: i32, y: i32) -> Node {
+  pub fn set(&mut self, Node(n): Node, x: i64, y: i64) -> Node {
     let (old_key, level) = if n < 0 {
       let n = !n;
       if n & EMPTY_NODE_MASK != 0 {
@@ -465,7 +464,7 @@ impl Universe {
   }
 
   /// Returns (left, top, right, bottom), right and bottom are exclusive.
-  pub fn boundary(&self, Node(n): Node, center_x: i32, center_y: i32) -> Boundary {
+  pub fn boundary(&self, Node(n): Node, center_x: i64, center_y: i64) -> Boundary {
     if n < 0 {
       let n = !n;
       if n & EMPTY_NODE_MASK != 0 {
@@ -503,13 +502,13 @@ impl Universe {
   pub fn write_cells<F>(
     &self,
     Node(n): Node,
-    center_x: i32,
-    center_y: i32,
+    center_x: i64,
+    center_y: i64,
     boundary: Boundary,
     f: &mut F,
   )
   where
-    F: FnMut(i32, i32)
+    F: FnMut(i64, i64)
   {
     if n < 0 {
       let n = !n;
@@ -587,11 +586,11 @@ impl Universe {
   }
 }
 
-type Boundary = (i32, i32, i32, i32);
+type Boundary = (i64, i64, i64, i64);
 
 static LEVEL2_RESULTS: [u8; 65536] = compute_level2_results();
 
-const EMPTY_BOUNDARY: Boundary = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+const EMPTY_BOUNDARY: Boundary = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
 
 static LEVEL1_BOUNDARIES: [Boundary; 16] = compute_level1_boundaries();
 
@@ -609,7 +608,7 @@ const fn compute_level1_boundaries() -> [Boundary; 16] {
     } else if i & 0b1010 != 0 {
       (0, 1)
     } else {
-      (i32::MAX, i32::MIN)
+      (i64::MAX, i64::MIN)
     };
 
     let (y0, y1) = if i & 0b0011 != 0 {
@@ -621,7 +620,7 @@ const fn compute_level1_boundaries() -> [Boundary; 16] {
     } else if i & 0b1100 != 0 {
       (0, 1)
     } else {
-      (i32::MAX, i32::MIN)
+      (i64::MAX, i64::MIN)
     };
 
     output[i] = (x0, y0, x1, y1);
