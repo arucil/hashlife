@@ -23,7 +23,8 @@ pub fn read(
 
   src = &src[src.find('\n').unwrap_or(src.len())..];
 
-  let level = 33 - width.max(height).leading_zeros();
+  let level = width.max(height);
+  let level = 32 + (level & level - 1 != 0) as u32 - level.leading_zeros();
   let mut node = univ.new_empty_node(level as u16);
 
   let mut x = 0;
