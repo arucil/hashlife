@@ -39,10 +39,10 @@ struct NodeValue {
   /// `level` >= 2
   level: u16,
 
-  /// The memoized results of `2 ^ k` steps, where `k` is the key of the `HashMap`.
+  /// The memoized results of `2 ^ k` steps, where `k` is the index of the `Vec`.
   ///
   /// Maximal `k` is `level - 2`.
-  results: HashMap<u16, Node>,
+  results: Vec<Option<Node>>,
 }
 
 const EMPTY_NODE_MASK: i64 = 0x4000_0000_0000_0000;
@@ -50,7 +50,7 @@ const EMPTY_NODE_MASK: i64 = 0x4000_0000_0000_0000;
 impl Universe {
   pub fn new() -> Self {
     Self {
-      map: HashMap::new(),
+      map: HashMap::default(),
       vec: vec![],
       counter: 0,
     }
@@ -137,7 +137,7 @@ impl Universe {
       self.vec.push(NodeValue {
         key,
         level,
-        results: HashMap::new(),
+        results: vec![None; (level - 1) as usize],
       })
     }
     Node(new_node)
@@ -260,7 +260,7 @@ impl Universe {
       let value = &self.vec[n as usize];
       let level = value.level;
       let k = k.min(level - 2);
-      if let Some(&result) = value.results.get(&k) {
+      if let Some(result) = value.results[k as usize] {
         return result;
       }
 
@@ -326,7 +326,7 @@ impl Universe {
         let result = self.new_node(level - 1, NodeKey {
           nw, ne, sw, se,
         });
-        self.vec[n as usize].results.insert(k, result);
+        self.vec[n as usize].results[k as usize] = Some(result);
         result
       }
     }
@@ -459,7 +459,7 @@ impl Universe {
     let bits = LEVEL2_RESULTS[lv2_bits as usize] as i64;
 
     let result = Node(!bits);
-    self.vec[n as usize].results.insert(0, result);
+    self.vec[n as usize].results[0] = Some(result);
     result
   }
 
