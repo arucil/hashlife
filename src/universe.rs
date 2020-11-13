@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::hash::Hash;
 use itertools::Itertools;
 use std::iter;
@@ -16,12 +16,10 @@ use std::iter;
 /// Otherwise, the result represents the bit pattern of a node of level one, e.g.
 /// bit 0 represents the `(0, 0)` cell, bit 2 the `(0, 1)` cell, etc.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Node(i64);
+pub struct Node(u64);
 
 pub struct Universe {
-  map: HashMap<NodeKey, i64>,
-  vec: Vec<NodeValue>,
-  counter: i64,
+  map: IndexMap<NodeKey, Box<NodeValue>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -42,17 +40,18 @@ struct NodeValue {
   /// The memoized results of `2 ^ k` steps, where `k` is the index of the `Vec`.
   ///
   /// Maximal `k` is `level - 2`.
-  results: Vec<Option<Node>>,
+  results: Box<[Node]>,
 }
 
-const EMPTY_NODE_MASK: i64 = 0x4000_0000_0000_0000;
+const EMPTY_NODE_MASK: u64 = 0x2;
+const INLINE_NODE_MASK: u64 = 0x1;
+const INLINE_NODE_BIT_SHIFT: usize = 2;
+const INVALID_NODE: Node = Node(0);
 
 impl Universe {
   pub fn new() -> Self {
     Self {
-      map: HashMap::default(),
-      vec: vec![],
-      counter: 0,
+      map: IndexMap::default(),
     }
   }
 
@@ -86,15 +85,15 @@ impl Universe {
   }
 
   fn level(&self, Node(n): Node) -> u16 {
-    if n < 0 {
-      let n = !n;
+    if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
-        n as u16
+        (n >> INLINE_NODE_BIT_SHIFT) as u16
       } else {
         1
       }
     } else {
-      self.vec[n as usize].level
+      node_value_ref(n).level
+      // self.vec[n as usize].level
     }
   }
 
@@ -104,51 +103,57 @@ impl Universe {
         panic!("level == 0")
       }
       1 => {
-        Node(!0)
+        Node(INLINE_NODE_MASK)
       }
       _ => {
-        Node(!(level as i64 | EMPTY_NODE_MASK))
+        Node((level as u64) << INLINE_NODE_BIT_SHIFT | EMPTY_NODE_MASK | INLINE_NODE_MASK)
       }
     }
   }
 
   pub fn new_node(&mut self, level: u16, key: NodeKey) -> Node {
-    if key.nw.0 < 0 && key.ne.0 < 0 && key.sw.0 < 0 && key.se.0 < 0 {
-      if !key.nw.0 & EMPTY_NODE_MASK != 0 &&
-        !key.ne.0 & EMPTY_NODE_MASK != 0 &&
-        !key.sw.0 & EMPTY_NODE_MASK != 0 &&
-        !key.se.0 & EMPTY_NODE_MASK != 0
+    if key.nw.0 & INLINE_NODE_MASK != 0 &&
+      key.ne.0 & INLINE_NODE_MASK != 0 &&
+      key.sw.0 & INLINE_NODE_MASK != 0 &&
+      key.se.0 & INLINE_NODE_MASK != 0
+    {
+      if key.nw.0 & EMPTY_NODE_MASK != 0 &&
+        key.ne.0 & EMPTY_NODE_MASK != 0 &&
+        key.sw.0 & EMPTY_NODE_MASK != 0 &&
+        key.se.0 & EMPTY_NODE_MASK != 0
       {
-        let level = !key.nw.0 as u16;
+        let level = (key.nw.0 >> INLINE_NODE_BIT_SHIFT) as u16;
         return self.new_empty_node(level + 1);
-      } else if !key.nw.0 == 0 &&
-        !key.ne.0 == 0 &&
-        !key.sw.0 == 0 &&
-        !key.se.0 == 0
+      }
+
+      if key.nw.0 >> INLINE_NODE_BIT_SHIFT == 0 &&
+        key.ne.0 >> INLINE_NODE_BIT_SHIFT == 0 &&
+        key.sw.0 >> INLINE_NODE_BIT_SHIFT == 0 &&
+        key.se.0 >> INLINE_NODE_BIT_SHIFT == 0
       {
         return self.new_empty_node(2);
       }
     }
 
-    let counter = self.counter;
-    let new_node = *self.map.entry(key.clone()).or_insert(counter);
-    if new_node == counter {
-      self.counter += 1;
-      self.vec.push(NodeValue {
+    let new_node = self.map.entry(key.clone()).or_insert_with(|| {
+      Box::new(NodeValue {
         key,
         level,
-        results: vec![None; (level - 1) as usize],
+        results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
       })
-    }
-    Node(new_node)
+    });
+
+    let n = new_node.as_ref() as *const NodeValue as u64;
+    debug_assert!(n & 3 == 0);
+
+    Node(n)
   }
 
   /// `(x, y)` are coordinate relative to center of the node.
   pub fn set(&mut self, Node(n): Node, x: i64, y: i64) -> Node {
-    let (old_key, level) = if n < 0 {
-      let n = !n;
+    let (old_key, level) = if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
-        let level = n as u16;
+        let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
         let sub_empty = self.new_empty_node(level - 1);
         (NodeKey {
           nw: sub_empty,
@@ -157,17 +162,18 @@ impl Universe {
           se: sub_empty,
         }, level)
       } else {
-        assert!(x >= -1 && x < 1 && y >= -1 && y < 1);
-        return Node(!(n | 1 << (x + 1 + (y + 1) * 2)));
+        debug_assert!(x >= -1 && x < 1 && y >= -1 && y < 1);
+        let shift = (x + 1 + (y + 1) * 2) as usize + INLINE_NODE_BIT_SHIFT;
+        return Node(n | 1 << shift);
       }
     } else {
-      let n = n as usize;
-      (self.vec[n].key.clone(), self.vec[n].level)
+      let n = node_value_ref(n);
+      (n.key.clone(), n.level)
     };
 
     let radius = 1 << (level - 1);
     let sub_radius = radius >> 1;
-    assert!(x >= -radius && x < radius && y >= -radius && y < radius);
+    debug_assert!(x >= -radius && x < radius && y >= -radius && y < radius);
 
     let new_key = if y < 0 {
       if x < 0 {
@@ -199,24 +205,24 @@ impl Universe {
   }
 
   pub fn expand(&mut self, Node(n): Node) -> Node {
-    if n < 0 {
-      let n = !n;
+    if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
-        let level = n as u16;
+        let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
         self.new_empty_node(level + 1)
       } else {
-        let bits = n as u8 as i64;
-        let nw = Node(!((bits & 0b0001) << 3));
-        let ne = Node(!((bits & 0b0010) << 1));
-        let sw = Node(!((bits & 0b0100) >> 1));
-        let se = Node(!((bits & 0b1000) >> 3));
+        let bits = (n >> INLINE_NODE_BIT_SHIFT) as u8 as u64;
+        let nw = Node(((bits & 0b0001) << 3) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
+        let ne = Node(((bits & 0b0010) << 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
+        let sw = Node(((bits & 0b0100) >> 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
+        let se = Node(((bits & 0b1000) >> 3) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
         self.new_node(2, NodeKey {
           nw, ne, sw, se,
         })
       }
     } else {
-      let key = self.vec[n as usize].key.clone();
-      let level = self.vec[n as usize].level;
+      let n = node_value_ref(n);
+      let key = &n.key;
+      let level = n.level;
       let empty = self.new_empty_node(level - 1);
       let nw = self.new_node(level, NodeKey {
         nw: empty,
@@ -254,19 +260,20 @@ impl Universe {
 
   /// Move forward `2 ^ min(k, level - 2)` steps.
   pub fn step(&mut self, Node(n): Node, k: u16) -> Node {
-    if n < 0 {
+    if n & INLINE_NODE_MASK != 0 {
       self.empty_subnode(n)
     } else {
-      let value = &self.vec[n as usize];
-      let level = value.level;
+      let n = node_value_ref_mut(n);
+      let level = n.level;
       let k = k.min(level - 2);
-      if let Some(result) = value.results[k as usize] {
+      let result = n.results[k as usize];
+      if result != INVALID_NODE {
         return result;
       }
 
-      let key = value.key.clone();
+      let key = &n.key;
       if level == 2 {
-        self.one_step_level2(n, key)
+        self.one_step_level2(n)
       } else {
         let n0 = self.step(key.nw, k);
         let n1 = self.horizontal_center_node(key.nw, key.ne);
@@ -326,20 +333,22 @@ impl Universe {
         let result = self.new_node(level - 1, NodeKey {
           nw, ne, sw, se,
         });
-        self.vec[n as usize].results[k as usize] = Some(result);
+        n.results[k as usize] = result;
         result
       }
     }
   }
 
   fn horizontal_center_node(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
-    if n1 < 0 && n2 < 0 {
+    if n1 & INLINE_NODE_MASK != 0 && n2 & INLINE_NODE_MASK != 0 {
       return Node(n1)
     } else {
-      let level = if n1 < 0 {
-        self.vec[n2 as usize].level
+      let level = if n1 & INLINE_NODE_MASK != 0 {
+        node_value_ref(n2).level
+        // self.vec[n2 as usize].level
       } else {
-        self.vec[n1 as usize].level
+        node_value_ref(n1).level
+        // self.vec[n1 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.ne);
@@ -354,13 +363,15 @@ impl Universe {
   }
 
   fn vertical_center_node(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
-    if n1 < 0 && n2 < 0 {
+    if n1 & INLINE_NODE_MASK != 0 && n2 & INLINE_NODE_MASK != 0 {
       return Node(n1)
     } else {
-      let level = if n1 < 0 {
-        self.vec[n2 as usize].level
+      let level = if n1 & INLINE_NODE_MASK != 0 {
+        // self.vec[n2 as usize].level
+        node_value_ref(n2).level
       } else {
-        self.vec[n1 as usize].level
+        // self.vec[n1 as usize].level
+        node_value_ref(n1).level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.sw);
@@ -381,29 +392,37 @@ impl Universe {
     Node(n3): Node,
     Node(n4): Node,
   ) -> Node {
-    if n1 < 0 && n2 < 0 && n3 < 0 && n4 < 0 {
-      if !n1 & EMPTY_NODE_MASK != 0 {
-        assert!(!n2 & EMPTY_NODE_MASK != 0);
-        assert!(!n3 & EMPTY_NODE_MASK != 0);
-        assert!(!n4 & EMPTY_NODE_MASK != 0);
+    if n1 & INLINE_NODE_MASK != 0 &&
+      n2 & INLINE_NODE_MASK != 0 &&
+      n3 & INLINE_NODE_MASK != 0 &&
+      n4 & INLINE_NODE_MASK != 0
+    {
+      if n1 & EMPTY_NODE_MASK != 0 {
+        debug_assert!(n2 & EMPTY_NODE_MASK != 0);
+        debug_assert!(n3 & EMPTY_NODE_MASK != 0);
+        debug_assert!(n4 & EMPTY_NODE_MASK != 0);
         return Node(n1);
       } else {
-        let n1 = !n1 as u8;
-        let n2 = !n2 as u8;
-        let n3 = !n3 as u8;
-        let n4 = !n4 as u8;
+        let n1 = (n1 >> INLINE_NODE_BIT_SHIFT) as u8;
+        let n2 = (n2 >> INLINE_NODE_BIT_SHIFT) as u8;
+        let n3 = (n3 >> INLINE_NODE_BIT_SHIFT) as u8;
+        let n4 = (n4 >> INLINE_NODE_BIT_SHIFT) as u8;
         let bits = n1 >> 3 & 1 | n2 >> 1 & 2 | n3 << 1 & 4 | n4 << 3 & 8;
-        return Node(!(bits as i64));
+        return Node((bits as u64) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
       }
     } else {
-      let level = if n1 >= 0 {
-        self.vec[n1 as usize].level
-      } else if n2 >= 0 {
-        self.vec[n2 as usize].level
-      } else if n3 >= 0 {
-        self.vec[n3 as usize].level
+      let level = if n1 & INLINE_NODE_MASK == 0 {
+        node_value_ref(n1).level
+        // self.vec[n1 as usize].level
+      } else if n2 & INLINE_NODE_MASK == 0 {
+        node_value_ref(n2).level
+        // self.vec[n2 as usize].level
+      } else if n3 & INLINE_NODE_MASK == 0 {
+        node_value_ref(n3).level
+        //self.vec[n3 as usize].level
       } else {
-        self.vec[n4 as usize].level
+        node_value_ref(n4).level
+        //self.vec[n4 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.se);
@@ -425,52 +444,55 @@ impl Universe {
   where
     F: FnOnce(&NodeKey) -> Node
   {
-    if n < 0 {
+    if n & INLINE_NODE_MASK != 0 {
       self.empty_subnode(n)
     } else {
-      f(&self.vec[n as usize].key)
+      f(&node_value_ref(n).key)
     }
   }
 
-  fn empty_subnode(&self, n: i64) -> Node {
-    let n = !n;
+  fn empty_subnode(&self, n: u64) -> Node {
     if n & EMPTY_NODE_MASK != 0 {
-      let level = n as u16;
+      let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
       self.new_empty_node(level - 1)
     } else {
       unreachable!()
     }
   }
 
-  fn one_step_level2(&mut self, n: i64, key: NodeKey) -> Node {
-    let nw = !key.nw.0 as u64;
-    let ne = !key.ne.0 as u64;
-    let sw = !key.sw.0 as u64;
-    let se = !key.se.0 as u64;
-    assert!(nw < 16);
-    assert!(ne < 16);
-    assert!(sw < 16);
-    assert!(se < 16);
+  fn one_step_level2(&mut self, n: &mut NodeValue) -> Node {
+    let nw = n.key.nw.0 as u64;
+    let ne = n.key.ne.0 as u64;
+    let sw = n.key.sw.0 as u64;
+    let se = n.key.se.0 as u64;
+    debug_assert!(nw & INLINE_NODE_MASK != 0);
+    debug_assert!(ne & INLINE_NODE_MASK != 0);
+    debug_assert!(sw & INLINE_NODE_MASK != 0);
+    debug_assert!(se & INLINE_NODE_MASK != 0);
+    let nw = nw >> INLINE_NODE_BIT_SHIFT;
+    let ne = ne >> INLINE_NODE_BIT_SHIFT;
+    let sw = sw >> INLINE_NODE_BIT_SHIFT;
+    let se = se >> INLINE_NODE_BIT_SHIFT;
 
     let lv2_bits = (nw & 0b11) | (ne & 0b11) << 2;
     let lv2_bits = lv2_bits | (nw & 0b1100) << 2 | (ne & 0b1100) << 4;
     let lv2_bits = lv2_bits | (sw & 0b11) << 8 | (se & 0b11) << 10;
     let lv2_bits = lv2_bits | (sw & 0b1100) << 10 | (se & 0b1100) << 12;
-    let bits = LEVEL2_RESULTS[lv2_bits as usize] as i64;
+    let bits = LEVEL2_RESULTS[lv2_bits as usize] as u64;
 
-    let result = Node(!bits);
-    self.vec[n as usize].results[0] = Some(result);
+    let result = Node(bits << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
+    n.results[0] = result;
     result
   }
 
   /// Returns (left, top, right, bottom), right and bottom are exclusive.
   pub fn boundary(&self, Node(n): Node, center_x: i64, center_y: i64) -> Boundary {
-    if n < 0 {
-      let n = !n;
+    if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         EMPTY_BOUNDARY
       } else {
-        let b@(x0, y0, x1, y1) = LEVEL1_BOUNDARIES[n as u16 as usize];
+        let n = (n >> INLINE_NODE_BIT_SHIFT) as u16;
+        let b@(x0, y0, x1, y1) = LEVEL1_BOUNDARIES[n as usize];
         if b == EMPTY_BOUNDARY {
           b
         } else {
@@ -478,8 +500,9 @@ impl Universe {
         }
       }
     } else {
-      let key = &self.vec[n as usize].key;
-      let level = self.vec[n as usize].level;
+      let n = node_value_ref(n);
+      let key = &n.key;
+      let level = n.level;
       let sub_radius = 1 << (level - 2);
       let nw_bound = self.boundary(key.nw,
         center_x - sub_radius, center_y - sub_radius);
@@ -510,10 +533,9 @@ impl Universe {
   where
     F: FnMut(i64, i64)
   {
-    if n < 0 {
-      let n = !n;
+    if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK == 0 {
-        let bits = n as u16;
+        let bits = (n >> INLINE_NODE_BIT_SHIFT) as u16;
         if bits & 1 != 0 {
           f(center_x - 1, center_y - 1)
         }
@@ -528,8 +550,9 @@ impl Universe {
         }
       }
     } else {
-      let key = &self.vec[n as usize].key;
-      let level = self.vec[n as usize].level;
+      let n = node_value_ref(n);
+      let key = &n.key;
+      let level = n.level;
       let radius = 1 << (level - 1);
       if center_x + radius <= boundary.0 ||
         center_x - radius >= boundary.2 ||
@@ -552,14 +575,13 @@ impl Universe {
   }
 
   pub fn debug(&self, Node(n): Node) -> String {
-    if n < 0 {
-      let n = !n;
+    if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
-        let n = n as u16;
+        let n = (n >> INLINE_NODE_BIT_SHIFT) as u16;
         let row = iter::repeat(' ').take(1 << n).collect::<String>();
         iter::repeat(row).take(1 << n).join("\n")
       } else {
-        let bits = n as u8;
+        let bits = (n >> INLINE_NODE_BIT_SHIFT) as u8;
         format!("{}{}\n{}{}",
           if bits & 1 != 0 { '#' } else { ' ' },
           if bits & 2 != 0 { '#' } else { ' ' },
@@ -568,7 +590,7 @@ impl Universe {
         )
       }
     } else {
-      let key = &self.vec[n as usize].key;
+      let key = &node_value_ref(n).key;
 
       let nw = self.debug(key.nw);
       let ne = self.debug(key.ne);
@@ -584,6 +606,14 @@ impl Universe {
       lines.join("\n")
     }
   }
+}
+
+fn node_value_ref(n: u64) -> &'static NodeValue {
+  unsafe { std::mem::transmute(n) }
+}
+
+fn node_value_ref_mut(n: u64) -> &'static mut NodeValue {
+  unsafe { std::mem::transmute(n) }
 }
 
 type Boundary = (i64, i64, i64, i64);
@@ -741,7 +771,7 @@ mod tests {
     let node = uni.set(node, -1, 0);
     let node = uni.set(node, -1, 1);
     let node = uni.step(node, 0);
-    assert_eq!(node, Node(!0b11));
+    assert_eq!(node, Node(0b11 << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK));
   }
 
   #[test]
