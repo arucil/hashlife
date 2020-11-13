@@ -6,15 +6,15 @@ use std::iter;
 /// Represents a node in a quadtree.
 ///
 /// # Internals
-/// If the internal value is non-negative, it's the index of an internal node,
-/// whose level is greater than or equal to 2.
+///
+/// If the lowest two bits of the internal value is zero, it's a pointer to an
+/// internal node, whose level is greater than or equal to 2.
 /// 
-/// If the internal value is negative, take the bitwise negation, and if the
-/// result has the `EMPTY_NODE_MASK` bit set, it's an empty node, and the rest
-/// bit pattern (i.e. excluding `EMPTY_NODE_MASK`) represents the level of the
-/// node.  
-/// Otherwise, the result represents the bit pattern of a node of level one, e.g.
-/// bit 0 represents the `(0, 0)` cell, bit 2 the `(0, 1)` cell, etc.
+/// If the lowest two bits are set, it's an empty node, and the rest bits
+/// represents the level of the node.  
+/// If only the lowest bit is set, it's an node of level one, i.e. an 2x2 node,
+/// and the rest bits represents the cells of the node, e.g., bit 2 represents
+/// the `(0, 0)` cell, bit 4 the `(0, 1)` cell, etc.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Node(u64);
 
@@ -33,6 +33,10 @@ pub struct NodeKey {
 #[derive(Clone)]
 struct NodeValue {
   key: NodeKey,
+
+  /// index of `Universe::map`.
+  index: usize,
+  refcount: u64,
 
   /// `level` >= 2
   level: u16,
@@ -135,10 +139,13 @@ impl Universe {
       }
     }
 
+    let len = self.map.len();
     let new_node = self.map.entry(key.clone()).or_insert_with(|| {
       Box::new(NodeValue {
         key,
         level,
+        index: len,
+        refcount: 1,
         results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
       })
     });
@@ -345,10 +352,8 @@ impl Universe {
     } else {
       let level = if n1 & INLINE_NODE_MASK != 0 {
         node_value_ref(n2).level
-        // self.vec[n2 as usize].level
       } else {
         node_value_ref(n1).level
-        // self.vec[n1 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.ne);
@@ -367,10 +372,8 @@ impl Universe {
       return Node(n1)
     } else {
       let level = if n1 & INLINE_NODE_MASK != 0 {
-        // self.vec[n2 as usize].level
         node_value_ref(n2).level
       } else {
-        // self.vec[n1 as usize].level
         node_value_ref(n1).level
       };
 
@@ -413,16 +416,12 @@ impl Universe {
     } else {
       let level = if n1 & INLINE_NODE_MASK == 0 {
         node_value_ref(n1).level
-        // self.vec[n1 as usize].level
       } else if n2 & INLINE_NODE_MASK == 0 {
         node_value_ref(n2).level
-        // self.vec[n2 as usize].level
       } else if n3 & INLINE_NODE_MASK == 0 {
         node_value_ref(n3).level
-        //self.vec[n3 as usize].level
       } else {
         node_value_ref(n4).level
-        //self.vec[n4 as usize].level
       };
 
       let nw = self.quadrant(Node(n1), |key| key.se);
