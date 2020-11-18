@@ -34,17 +34,13 @@ pub struct NodeKey {
 struct NodeValue {
   key: NodeKey,
 
-  /// index of `Universe::map`.
-  index: usize,
-  refcount: u64,
-
   /// `level` >= 2
   level: u16,
 
   /// The memoized results of `2 ^ k` steps, where `k` is the index of the `Vec`.
   ///
   /// Maximal `k` is `level - 2`.
-  results: Box<[Node]>,
+  memo_results: Box<[Node]>,
 }
 
 const EMPTY_NODE_MASK: u64 = 0x2;
@@ -115,7 +111,7 @@ impl Universe {
   }
 
   /// Doesn't increment the refcount.
-  fn new_node_raw(&mut self, level: u16, key: NodeKey) -> Node {
+  fn new_node(&mut self, level: u16, key: NodeKey) -> Node {
     if key.nw.0 & EMPTY_NODE_MASK != 0 &&
       key.ne.0 & EMPTY_NODE_MASK != 0 &&
       key.sw.0 & EMPTY_NODE_MASK != 0 &&
@@ -133,15 +129,11 @@ impl Universe {
       return self.new_empty_node(2);
     }
 
-    let len = self.map.len();
     let new_node = self.map.entry(key.clone()).or_insert_with(|| {
-      let rc = (level == 2) as u64;
       Box::new(NodeValue {
         key,
         level,
-        index: len,
-        refcount: rc,
-        results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
+        memo_results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
       })
     });
 
@@ -152,7 +144,7 @@ impl Universe {
   }
 
   /// `(x, y)` are coordinate relative to center of the node.
-  pub fn set(&mut self, node@Node(n): Node, x: i64, y: i64) -> Node {
+  pub fn set(&mut self, Node(n): Node, x: i64, y: i64) -> Node {
     let (old_key, level) = if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
@@ -172,7 +164,6 @@ impl Universe {
       let n = node_value_ref(n);
       let key = n.key.clone();
       let level = n.level;
-      self.dec_node_rc(node);
       (key, level)
     };
 
@@ -206,12 +197,10 @@ impl Universe {
       }
     };
 
-    let new_node = self.new_node_raw(level, new_key);
-    self.inc_node_rc(new_node);
-    new_node
+    self.new_node(level, new_key)
   }
 
-  pub fn expand(&mut self, node@Node(n): Node) -> Node {
+  pub fn expand(&mut self, Node(n): Node) -> Node {
     if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
@@ -222,7 +211,7 @@ impl Universe {
         let ne = Node(((bits & 0b0010) << 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
         let sw = Node(((bits & 0b0100) >> 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
         let se = Node(((bits & 0b1000) >> 3) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-        let new_node = self.new_node_raw(2, NodeKey {
+        let new_node = self.new_node(2, NodeKey {
           nw, ne, sw, se,
         });
         new_node
@@ -233,42 +222,34 @@ impl Universe {
       let level = n.level;
       let empty = self.new_empty_node(level - 1);
 
-      let nw = self.new_node_raw(level, NodeKey {
+      let nw = self.new_node(level, NodeKey {
         nw: empty,
         ne: empty,
         sw: empty,
         se: key.nw,
       });
-      self.inc_node_rc(nw);
-      let ne = self.new_node_raw(level, NodeKey {
+      let ne = self.new_node(level, NodeKey {
         nw: empty,
         ne: empty,
         sw: key.ne,
         se: empty,
       });
-      self.inc_node_rc(ne);
-      let sw = self.new_node_raw(level, NodeKey {
+      let sw = self.new_node(level, NodeKey {
         nw: empty,
         ne: key.sw,
         sw: empty,
         se: empty,
       });
-      self.inc_node_rc(sw);
-      let se = self.new_node_raw(level, NodeKey {
+      let se = self.new_node(level, NodeKey {
         nw: key.se,
         ne: empty,
         sw: empty,
         se: empty,
       });
-      self.inc_node_rc(se);
 
-      self.dec_node_rc(node);
-
-      let new_node = self.new_node_raw(level + 1, NodeKey {
+      self.new_node(level + 1, NodeKey {
         nw, ne, sw, se,
-      });
-      self.inc_node_rc(new_node);
-      new_node
+      })
     }
   }
 
@@ -276,125 +257,15 @@ impl Universe {
     self.map.len()
   }
 
-  fn inc_tree_rc(&self, Node(n): Node, inc: u64) {
-    if n & INLINE_NODE_MASK != 0 {
-      return;
-    }
-
-    let mut stk = vec![n];
-    while let Some(n) = stk.pop() {
-      let n = node_value_ref_mut(n);
-      if n.level == 2 {
-        continue;
-      }
-      n.refcount += inc;
-
-      if n.key.nw.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.nw.0);
-      }
-      if n.key.ne.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.ne.0);
-      }
-      if n.key.sw.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.sw.0);
-      }
-      if n.key.se.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.se.0);
-      }
-    }
-  }
-
-  fn inc_node_rc(&self, Node(n): Node) {
-    if n & INLINE_NODE_MASK != 0 {
-      return;
-    }
-
-    let n = node_value_ref_mut(n);
-    if n.level > 2 {
-      n.refcount += 1;
-    }
-  }
-
-  fn dec_tree_rc(&mut self, Node(n): Node) {
-    if n & INLINE_NODE_MASK != 0 {
-      return;
-    }
-
-    let mut stk = vec![n];
-
-    while let Some(n) = stk.pop() {
-      let n = node_value_ref_mut(n);
-      // Doesn't reclaim nodes of level 2.
-      if n.level == 2 {
-        continue;
-      }
-      debug_assert!(n.refcount != 0);
-      n.refcount -= 1;
-
-      if n.key.nw.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.nw.0);
-      }
-      if n.key.ne.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.ne.0);
-      }
-      if n.key.sw.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.sw.0);
-      }
-      if n.key.se.0 & INLINE_NODE_MASK == 0 {
-        stk.push(n.key.se.0);
-      }
-
-      if n.refcount == 0 {
-        self.remove_node(n);
-      }
-    }
-  }
-
-  /// Doesn't reclaim entire tree.
-  fn dec_node_rc(&mut self, Node(n): Node) {
-    if n & INLINE_NODE_MASK != 0 {
-      return;
-    }
-
-    let n = node_value_ref_mut(n);
-    // Doesn't reclaim node of level 2.
-    if n.level == 2 {
-      return;
-    }
-    debug_assert!(n.refcount != 0);
-    n.refcount -= 1;
-
-    if n.refcount == 0 {
-      self.remove_node(n);
-    }
-  }
-
-  /// Doesn't remove entire tree.
-  fn remove_node(&mut self, n: &NodeValue) {
-    debug_assert!(n.level > 2);
-    let last = self.map.len() - 1;
-    self.map[last].index = n.index;
-    self.map.swap_remove_index(n.index);
-  }
-
   /// Move forward `2 ^ min(k, level - 2)` steps.
-  pub fn step(&mut self, node: Node, k: u16) -> Node {
-    let new_node = self.step_raw(node, k);
-    self.dec_tree_rc(node);
-    new_node
-  }
-
-  /// # Invariants
-  /// - Doesn't decrement refcount of old tree.
-  /// - Increments refcount of new tree.
-  fn step_raw(&mut self, Node(n): Node, k: u16) -> Node {
+  pub fn step(&mut self, Node(n): Node, k: u16) -> Node {
     if n & INLINE_NODE_MASK != 0 {
       self.empty_subnode(n)
     } else {
       let n = node_value_ref_mut(n);
       let level = n.level;
       let k = k.min(level - 2);
-      let result = n.results[k as usize];
+      let result = n.memo_results[k as usize];
       if result != INVALID_NODE {
         return result;
       }
@@ -403,102 +274,74 @@ impl Universe {
       if level == 2 {
         self.one_step_level2(n)
       } else {
-        let n0 = self.step_raw(key.nw, k);
+        let n0 = self.step(key.nw, k);
 
         let n1_old = self.horizontal_center_node(key.nw, key.ne);
-        let n1 = self.step_raw(n1_old, k);
-        self.dec_tree_rc(n1_old);
+        let n1 = self.step(n1_old, k);
 
-        let n2 = self.step_raw(key.ne, k);
+        let n2 = self.step(key.ne, k);
 
         let n3_old = self.vertical_center_node(key.nw, key.sw);
-        let n3 = self.step_raw(n3_old, k);
-        self.dec_tree_rc(n3_old);
+        let n3 = self.step(n3_old, k);
 
-        let n4_old = self.center_node(key.nw, key.ne, key.sw, key.se, false);
-        let n4 = self.step_raw(n4_old, k);
-        self.dec_tree_rc(n4_old);
+        let n4_old = self.center_node(key.nw, key.ne, key.sw, key.se);
+        let n4 = self.step(n4_old, k);
 
         let n5_old = self.vertical_center_node(key.ne, key.se);
-        let n5 = self.step_raw(n5_old, k);
-        self.dec_tree_rc(n5_old);
+        let n5 = self.step(n5_old, k);
 
-        let n6 = self.step_raw(key.sw, k);
+        let n6 = self.step(key.sw, k);
 
         let n7_old = self.horizontal_center_node(key.sw, key.se);
-        let n7 = self.step_raw(n7_old, k);
-        self.dec_tree_rc(n7_old);
+        let n7 = self.step(n7_old, k);
 
-        let n8 = self.step_raw(key.se, k);
+        let n8 = self.step(key.se, k);
 
         let nw;
         let ne;
         let sw;
         let se;
         if k == level - 2 {
-          let nw_old = self.new_node_raw(level - 1, NodeKey {
+          let nw_old = self.new_node(level - 1, NodeKey {
             nw: n0,
             ne: n1,
             sw: n3,
             se: n4,
           });
-          self.inc_tree_rc(nw_old, 1);
-
-          let ne_old = self.new_node_raw(level - 1, NodeKey {
+          let ne_old = self.new_node(level - 1, NodeKey {
             nw: n1,
             ne: n2,
             sw: n4,
             se: n5,
           });
-          self.inc_tree_rc(ne_old, 1);
-
-          let sw_old = self.new_node_raw(level - 1, NodeKey {
+          let sw_old = self.new_node(level - 1, NodeKey {
             nw: n3,
             ne: n4,
             sw: n6,
             se: n7,
           });
-          self.inc_tree_rc(sw_old, 1);
-
-          let se_old = self.new_node_raw(level - 1, NodeKey {
+          let se_old = self.new_node(level - 1, NodeKey {
             nw: n4,
             ne: n5,
             sw: n7,
             se: n8,
           });
-          self.inc_tree_rc(se_old, 1);
 
-          nw = self.step_raw(nw_old, k);
-          ne = self.step_raw(ne_old, k);
-          sw = self.step_raw(sw_old, k);
-          se = self.step_raw(se_old, k);
-
-          self.dec_tree_rc(nw_old);
-          self.dec_tree_rc(ne_old);
-          self.dec_tree_rc(sw_old);
-          self.dec_tree_rc(se_old);
+          nw = self.step(nw_old, k);
+          ne = self.step(ne_old, k);
+          sw = self.step(sw_old, k);
+          se = self.step(se_old, k);
         } else {
-          nw = self.center_node(n0, n1, n3, n4, true);
-          ne = self.center_node(n1, n2, n4, n5, true);
-          sw = self.center_node(n3, n4, n6, n7, true);
-          se = self.center_node(n4, n5, n7, n8, true);
+          nw = self.center_node(n0, n1, n3, n4);
+          ne = self.center_node(n1, n2, n4, n5);
+          sw = self.center_node(n3, n4, n6, n7);
+          se = self.center_node(n4, n5, n7, n8);
         }
 
-        self.dec_tree_rc(n0);
-        self.dec_tree_rc(n1);
-        self.dec_tree_rc(n2);
-        self.dec_tree_rc(n3);
-        self.dec_tree_rc(n4);
-        self.dec_tree_rc(n5);
-        self.dec_tree_rc(n6);
-        self.dec_tree_rc(n7);
-        self.dec_tree_rc(n8);
-
-        let result = self.new_node_raw(level - 1, NodeKey {
+        let result = self.new_node(level - 1, NodeKey {
           nw, ne, sw, se,
         });
-        self.inc_node_rc(result);
-        n.results[k as usize] = result;
+        n.memo_results[k as usize] = result;
         result
       }
     }
@@ -519,11 +362,9 @@ impl Universe {
       let ne = self.quadrant(Node(n2), |key| key.nw);
       let se = self.quadrant(Node(n2), |key| key.sw);
 
-      let new_node = self.new_node_raw(level, NodeKey {
+      self.new_node(level, NodeKey {
         nw, ne, sw, se,
-      });
-      self.inc_tree_rc(new_node, 1);
-      new_node
+      })
     }
   }
 
@@ -542,11 +383,9 @@ impl Universe {
       let sw = self.quadrant(Node(n2), |key| key.nw);
       let se = self.quadrant(Node(n2), |key| key.ne);
 
-      let new_node = self.new_node_raw(level, NodeKey {
+      self.new_node(level, NodeKey {
         nw, ne, sw, se,
-      });
-      self.inc_tree_rc(new_node, 1);
-      new_node
+      })
     }
   }
 
@@ -556,7 +395,6 @@ impl Universe {
     Node(n2): Node,
     Node(n3): Node,
     Node(n4): Node,
-    inc_tree_rc: bool,
   ) -> Node {
     if n1 & INLINE_NODE_MASK != 0 &&
       n2 & INLINE_NODE_MASK != 0 &&
@@ -592,11 +430,9 @@ impl Universe {
       let sw = self.quadrant(Node(n3), |key| key.ne);
       let se = self.quadrant(Node(n4), |key| key.nw);
 
-      let new_node = self.new_node_raw(level, NodeKey {
+      self.new_node(level, NodeKey {
         nw, ne, sw, se,
-      });
-        self.inc_tree_rc(new_node, 1);
-      new_node
+      })
     }
   }
 
@@ -646,7 +482,7 @@ impl Universe {
     let bits = LEVEL2_RESULTS[lv2_bits as usize] as u64;
 
     let result = Node(bits << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-    n.results[0] = result;
+    n.memo_results[0] = result;
     result
   }
 
@@ -1057,7 +893,7 @@ mod tests {
     let node4 = uni.set(node4, -2, -2);
     let node4 = uni.set(node4, -1, -1);
 
-    let node = uni.center_node(node1, node2, node3, node4, false);
+    let node = uni.center_node(node1, node2, node3, node4);
 
     assert_eq!(uni.debug(node), r"
 #  #
@@ -1152,19 +988,5 @@ mod tests {
                 
                 
                 ".trim_start_matches('\n'));
-  }
-
-  #[test]
-  fn test_gc() {
-    use std::fs;
-    use crate::rle;
-
-    let mut uni = Universe::new();
-    let src = fs::read_to_string("tests/fixtures/Breeder.lif").unwrap();
-    let node = rle::read(src, &mut uni);
-
-    uni.dec_tree_rc(node);
-
-    assert!(uni.map.values().all(|v| v.level == 2));
   }
 }
