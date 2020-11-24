@@ -1,4 +1,6 @@
 use indexmap::IndexMap;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use itertools::Itertools;
 use std::iter;
@@ -20,6 +22,9 @@ pub struct Node(u64);
 
 pub struct Universe {
   map: IndexMap<NodeKey, Box<NodeValue>>,
+  root_set: HashMap<Node, u64>,
+  gc_threshold: usize,
+  mark: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -41,17 +46,26 @@ struct NodeValue {
   ///
   /// Maximal `k` is `level - 2`.
   memo_results: Box<[Node]>,
+
+  /// index of `Universe::map`.
+  index: usize,
+
+  mark: bool,
 }
 
 const EMPTY_NODE_MASK: u64 = 0x2;
 const INLINE_NODE_MASK: u64 = 0x1;
 const INLINE_NODE_BIT_SHIFT: usize = 2;
 const INVALID_NODE: Node = Node(0);
+const INITIAL_GC_THRESHOLD: usize = 1000;
 
 impl Universe {
   pub fn new() -> Self {
     Self {
       map: IndexMap::default(),
+      gc_threshold: INITIAL_GC_THRESHOLD,
+      root_set: HashMap::new(),
+      mark: true,
     }
   }
 
@@ -110,7 +124,6 @@ impl Universe {
     }
   }
 
-  /// Doesn't increment the refcount.
   fn new_node(&mut self, level: u16, key: NodeKey) -> Node {
     if key.nw.0 & EMPTY_NODE_MASK != 0 &&
       key.ne.0 & EMPTY_NODE_MASK != 0 &&
@@ -129,22 +142,35 @@ impl Universe {
       return self.new_empty_node(2);
     }
 
+    if level > 2 && self.map.len() > self.gc_threshold {
+      self.gc();
+    }
+
+    let mark = !self.mark;
+    let index = self.map.len();
     let new_node = self.map.entry(key.clone()).or_insert_with(|| {
       Box::new(NodeValue {
         key,
         level,
         memo_results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
+        mark,
+        index,
       })
     });
 
     let n = new_node.as_ref() as *const NodeValue as u64;
     debug_assert!(n & 3 == 0);
 
-    Node(n)
+    let n = Node(n);
+    if level > 2 {
+      self.root(n);
+    }
+
+    n
   }
 
   /// `(x, y)` are coordinate relative to center of the node.
-  pub fn set(&mut self, Node(n): Node, x: i64, y: i64) -> Node {
+  pub fn set(&mut self, node@Node(n): Node, x: i64, y: i64) -> Node {
     let (old_key, level) = if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
@@ -171,36 +197,44 @@ impl Universe {
     let sub_radius = radius >> 1;
     debug_assert!(x >= -radius && x < radius && y >= -radius && y < radius);
 
+    let new_quadrant;
     let new_key = if y < 0 {
       if x < 0 {
+        new_quadrant = self.set(old_key.nw, x + sub_radius, y + sub_radius);
         NodeKey {
-          nw: self.set(old_key.nw, x + sub_radius, y + sub_radius),
+          nw: new_quadrant,
           ..old_key
         }
       } else {
+        new_quadrant = self.set(old_key.ne, x - sub_radius, y + sub_radius);
         NodeKey {
-          ne: self.set(old_key.ne, x - sub_radius, y + sub_radius),
+          ne: new_quadrant,
           ..old_key
         }
       }
     } else {
       if x < 0 {
+        new_quadrant = self.set(old_key.sw, x + sub_radius, y - sub_radius);
         NodeKey {
-          sw: self.set(old_key.sw, x + sub_radius, y - sub_radius),
+          sw: new_quadrant,
           ..old_key
         }
       } else {
+        new_quadrant = self.set(old_key.se, x - sub_radius, y - sub_radius);
         NodeKey {
-          se: self.set(old_key.se, x - sub_radius, y - sub_radius),
+          se: new_quadrant,
           ..old_key
         }
       }
     };
 
-    self.new_node(level, new_key)
+    let new_node = self.new_node(level, new_key);
+    self.unroot(node);
+    self.unroot(new_quadrant);
+    new_node
   }
 
-  pub fn expand(&mut self, Node(n): Node) -> Node {
+  pub fn expand(&mut self, node@Node(n): Node) -> Node {
     if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
@@ -211,10 +245,10 @@ impl Universe {
         let ne = Node(((bits & 0b0010) << 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
         let sw = Node(((bits & 0b0100) >> 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
         let se = Node(((bits & 0b1000) >> 3) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-        let new_node = self.new_node(2, NodeKey {
+
+        self.new_node(2, NodeKey {
           nw, ne, sw, se,
-        });
-        new_node
+        })
       }
     } else {
       let n = node_value_ref(n);
@@ -247,9 +281,15 @@ impl Universe {
         se: empty,
       });
 
-      self.new_node(level + 1, NodeKey {
+      let new_node = self.new_node(level + 1, NodeKey {
         nw, ne, sw, se,
-      })
+      });
+      self.unroot(node);
+      self.unroot(nw);
+      self.unroot(ne);
+      self.unroot(sw);
+      self.unroot(se);
+      new_node
     }
   }
 
@@ -258,7 +298,13 @@ impl Universe {
   }
 
   /// Move forward `2 ^ min(k, level - 2)` steps.
-  pub fn step(&mut self, Node(n): Node, k: u16) -> Node {
+  ///
+  /// Returns the result and if the result is newly added to root set.
+  fn step(
+    &mut self,
+    node@Node(n): Node,
+    k: u16
+  ) -> Node {
     if n & INLINE_NODE_MASK != 0 {
       self.empty_subnode(n)
     } else {
@@ -267,7 +313,13 @@ impl Universe {
       let k = k.min(level - 2);
       let result = n.memo_results[k as usize];
       if result != INVALID_NODE {
-        return result;
+        self.unroot(node);
+        if level > 3 && result.0 & INLINE_NODE_MASK == 0 {
+          self.root(result);
+          return result;
+        } else {
+          return result;
+        }
       }
 
       let key = &n.key;
@@ -276,61 +328,61 @@ impl Universe {
       } else {
         let n0 = self.step(key.nw, k);
 
-        let n1_old = self.horizontal_center_node(key.nw, key.ne);
-        let n1 = self.step(n1_old, k);
+        let n1 = self.horizontal_center_node(key.nw, key.ne);
+        let n1 = self.step(n1, k);
 
         let n2 = self.step(key.ne, k);
 
-        let n3_old = self.vertical_center_node(key.nw, key.sw);
-        let n3 = self.step(n3_old, k);
+        let n3 = self.vertical_center_node(key.nw, key.sw);
+        let n3 = self.step(n3, k);
 
-        let n4_old = self.center_node(key.nw, key.ne, key.sw, key.se);
-        let n4 = self.step(n4_old, k);
+        let n4 = self.center_node(key.nw, key.ne, key.sw, key.se);
+        let n4 = self.step(n4, k);
 
-        let n5_old = self.vertical_center_node(key.ne, key.se);
-        let n5 = self.step(n5_old, k);
+        let n5 = self.vertical_center_node(key.ne, key.se);
+        let n5 = self.step(n5, k);
 
         let n6 = self.step(key.sw, k);
 
-        let n7_old = self.horizontal_center_node(key.sw, key.se);
-        let n7 = self.step(n7_old, k);
+        let n7 = self.horizontal_center_node(key.sw, key.se);
+        let n7 = self.step(n7, k);
 
         let n8 = self.step(key.se, k);
 
-        let nw;
-        let ne;
-        let sw;
-        let se;
+        let mut nw;
+        let mut ne;
+        let mut sw;
+        let mut se;
         if k == level - 2 {
-          let nw_old = self.new_node(level - 1, NodeKey {
+          nw = self.new_node(level - 1, NodeKey {
             nw: n0,
             ne: n1,
             sw: n3,
             se: n4,
           });
-          let ne_old = self.new_node(level - 1, NodeKey {
+          ne = self.new_node(level - 1, NodeKey {
             nw: n1,
             ne: n2,
             sw: n4,
             se: n5,
           });
-          let sw_old = self.new_node(level - 1, NodeKey {
+          sw = self.new_node(level - 1, NodeKey {
             nw: n3,
             ne: n4,
             sw: n6,
             se: n7,
           });
-          let se_old = self.new_node(level - 1, NodeKey {
+          se = self.new_node(level - 1, NodeKey {
             nw: n4,
             ne: n5,
             sw: n7,
             se: n8,
           });
 
-          nw = self.step(nw_old, k);
-          ne = self.step(ne_old, k);
-          sw = self.step(sw_old, k);
-          se = self.step(se_old, k);
+          nw = self.step(nw, k);
+          ne = self.step(ne, k);
+          sw = self.step(sw, k);
+          se = self.step(se, k);
         } else {
           nw = self.center_node(n0, n1, n3, n4);
           ne = self.center_node(n1, n2, n4, n5);
@@ -342,12 +394,30 @@ impl Universe {
           nw, ne, sw, se,
         });
         n.memo_results[k as usize] = result;
+        self.unroot(node);
+        self.unroot(nw);
+        self.unroot(ne);
+        self.unroot(sw);
+        self.unroot(se);
+        self.unroot(n0);
+        self.unroot(n1);
+        self.unroot(n2);
+        self.unroot(n3);
+        self.unroot(n4);
+        self.unroot(n5);
+        self.unroot(n6);
+        self.unroot(n7);
+        self.unroot(n8);
         result
       }
     }
   }
 
-  fn horizontal_center_node(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
+  fn horizontal_center_node(
+    &mut self,
+    Node(n1): Node,
+    Node(n2): Node
+  ) -> Node {
     if n1 & INLINE_NODE_MASK != 0 && n2 & INLINE_NODE_MASK != 0 {
       Node(n1)
     } else {
@@ -368,7 +438,11 @@ impl Universe {
     }
   }
 
-  fn vertical_center_node(&mut self, Node(n1): Node, Node(n2): Node) -> Node {
+  fn vertical_center_node(
+    &mut self,
+    Node(n1): Node,
+    Node(n2): Node
+  ) -> Node {
     if n1 & INLINE_NODE_MASK != 0 && n2 & INLINE_NODE_MASK != 0 {
       Node(n1)
     } else {
@@ -484,6 +558,82 @@ impl Universe {
     let result = Node(bits << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
     n.memo_results[0] = result;
     result
+  }
+
+  fn root(&mut self, n: Node) {
+    *self.root_set.entry(n).or_default() += 1;
+  }
+
+  fn unroot(&mut self, n: Node) {
+    match self.root_set.entry(n) {
+      Entry::Occupied(mut c) => {
+        *c.get_mut() -= 1;
+        if *c.get() == 0 {
+          self.root_set.remove(&n);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn gc(&mut self) {
+    self.mark();
+    self.sweep();
+    self.gc_threshold = self.map.len() + self.map.len() / 3;
+    self.mark = !self.mark;
+  }
+
+  fn mark(&mut self) {
+    let mut stk = self.root_set.keys()
+      .map(|&Node(n)| node_value_ref_mut(n))
+      .collect_vec();
+
+    while let Some(n) = stk.pop() {
+      if n.mark == self.mark {
+        continue;
+      }
+
+      n.mark = self.mark;
+      if n.level <= 3 {
+        continue;
+      }
+
+      if n.key.nw.0 & INLINE_NODE_MASK == 0 {
+        stk.push(node_value_ref_mut(n.key.nw.0));
+      }
+      if n.key.ne.0 & INLINE_NODE_MASK == 0 {
+        stk.push(node_value_ref_mut(n.key.ne.0));
+      }
+      if n.key.sw.0 & INLINE_NODE_MASK == 0 {
+        stk.push(node_value_ref_mut(n.key.sw.0));
+      }
+      if n.key.se.0 & INLINE_NODE_MASK == 0 {
+        stk.push(node_value_ref_mut(n.key.se.0));
+      }
+
+      // TODO result is weak reference
+      for &n in n.memo_results.iter() {
+        if n != INVALID_NODE && n.0 & INLINE_NODE_MASK == 0 {
+          stk.push(node_value_ref_mut(n.0));
+        }
+      }
+    }
+  }
+
+  fn sweep(&mut self) {
+    let mut i = 0;
+    while i < self.map.len() {
+      let n = &*self.map[i];
+      if n.level == 2 || n.mark == self.mark {
+        i += 1;
+        continue;
+      }
+
+      let last = self.map.len() - 1;
+      self.map[last].index = i;
+
+      self.map.swap_remove_index(i);
+    }
   }
 
   /// Returns (left, top, right, bottom), right and bottom are exclusive.
@@ -704,6 +854,8 @@ mod tests {
  #  
   # 
     ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -724,6 +876,8 @@ mod tests {
    #    
         
         ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -736,6 +890,7 @@ mod tests {
     let node = uni.set(node, -1, 0);
     let node = uni.set(node, -1, 1);
     assert_eq!(uni.boundary(node, 0, 0), (-2, -1, 1, 2));
+    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -760,6 +915,8 @@ mod tests {
   #  #  
         
         ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -773,6 +930,7 @@ mod tests {
     let node = uni.set(node, -1, 1);
     let node = uni.step(node, 0);
     assert_eq!(node, Node(0b11 << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK));
+    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -791,6 +949,8 @@ mod tests {
 #   
 ##  ".trim_start_matches('\n'));
 
+    assert_eq!(uni.root_set.len(), 0);
+
     let node = uni.expand(node);
     let node = uni.step(node, 0);
     assert_eq!(&uni.debug(node), r"
@@ -798,6 +958,8 @@ mod tests {
 ##  
   # 
 ##  ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -917,6 +1079,8 @@ mod tests {
 ##  
   # 
 ##  ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -938,6 +1102,8 @@ mod tests {
   ##    
         
         ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -959,6 +1125,8 @@ mod tests {
   ##    
         
         ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -988,5 +1156,23 @@ mod tests {
                 
                 
                 ".trim_start_matches('\n'));
+
+    assert_eq!(uni.root_set.len(), 1);
+  }
+
+  #[test]
+  fn test_gc() {
+    use std::fs;
+    use crate::rle;
+
+    let mut uni = Universe::new();
+    let src = fs::read_to_string("tests/fixtures/Breeder.lif").unwrap();
+    let node = rle::read(src, &mut uni);
+
+    assert_eq!(uni.root_set.len(), 1);
+
+    let _node = uni.simulate(node, 1);
+
+    assert_eq!(uni.root_set.len(), 1);
   }
 }
