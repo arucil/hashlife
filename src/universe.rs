@@ -579,7 +579,7 @@ impl Universe {
   fn gc(&mut self) {
     self.mark();
     self.sweep();
-    self.gc_threshold = self.map.len() + self.map.len() / 3;
+    self.gc_threshold = self.map.len() + self.map.len() / 3 + 1;
     self.mark = !self.mark;
   }
 
