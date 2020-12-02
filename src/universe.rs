@@ -1,7 +1,6 @@
 use indexmap::IndexMap;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-use std::hash::Hash;
+use rustc_hash::FxHasher;
+use std::hash::{Hash, BuildHasherDefault};
 use itertools::Itertools;
 use std::iter;
 
@@ -21,10 +20,7 @@ use std::iter;
 pub struct Node(u64);
 
 pub struct Universe {
-  map: IndexMap<NodeKey, Box<NodeValue>>,
-  root_set: HashMap<Node, u64>,
-  gc_threshold: usize,
-  mark: bool,
+  map: IndexMap<NodeKey, Box<NodeValue>, BuildHasherDefault<FxHasher>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -42,30 +38,21 @@ struct NodeValue {
   /// `level` >= 2
   level: u16,
 
-  /// The memoized results of `2 ^ k` steps, where `k` is the index of the `Vec`.
+  /// The memoized results of `2 ^ k` steps, where `k` is the index of the slice.
   ///
   /// Maximal `k` is `level - 2`.
   memo_results: Box<[Node]>,
-
-  /// index of `Universe::map`.
-  index: usize,
-
-  mark: bool,
 }
 
 const EMPTY_NODE_MASK: u64 = 0x2;
 const INLINE_NODE_MASK: u64 = 0x1;
 const INLINE_NODE_BIT_SHIFT: usize = 2;
 const INVALID_NODE: Node = Node(0);
-const INITIAL_GC_THRESHOLD: usize = 1000;
 
 impl Universe {
   pub fn new() -> Self {
     Self {
       map: IndexMap::default(),
-      gc_threshold: INITIAL_GC_THRESHOLD,
-      root_set: HashMap::new(),
-      mark: true,
     }
   }
 
@@ -142,19 +129,11 @@ impl Universe {
       return self.new_empty_node(2);
     }
 
-    if level > 2 && self.map.len() > self.gc_threshold {
-      self.gc();
-    }
-
-    let mark = !self.mark;
-    let index = self.map.len();
     let new_node = self.map.entry(key.clone()).or_insert_with(|| {
       Box::new(NodeValue {
         key,
         level,
         memo_results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
-        mark,
-        index,
       })
     });
 
@@ -162,15 +141,12 @@ impl Universe {
     debug_assert!(n & 3 == 0);
 
     let n = Node(n);
-    if level > 2 {
-      self.root(n);
-    }
 
     n
   }
 
   /// `(x, y)` are coordinate relative to center of the node.
-  pub fn set(&mut self, node@Node(n): Node, x: i64, y: i64) -> Node {
+  pub fn set(&mut self, Node(n): Node, x: i64, y: i64) -> Node {
     let (old_key, level) = if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
@@ -229,12 +205,10 @@ impl Universe {
     };
 
     let new_node = self.new_node(level, new_key);
-    self.unroot(node);
-    self.unroot(new_quadrant);
     new_node
   }
 
-  pub fn expand(&mut self, node@Node(n): Node) -> Node {
+  pub fn expand(&mut self, Node(n): Node) -> Node {
     if n & INLINE_NODE_MASK != 0 {
       if n & EMPTY_NODE_MASK != 0 {
         let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
@@ -284,11 +258,6 @@ impl Universe {
       let new_node = self.new_node(level + 1, NodeKey {
         nw, ne, sw, se,
       });
-      self.unroot(node);
-      self.unroot(nw);
-      self.unroot(ne);
-      self.unroot(sw);
-      self.unroot(se);
       new_node
     }
   }
@@ -298,11 +267,9 @@ impl Universe {
   }
 
   /// Move forward `2 ^ min(k, level - 2)` steps.
-  ///
-  /// Returns the result and if the result is newly added to root set.
   fn step(
     &mut self,
-    node@Node(n): Node,
+    Node(n): Node,
     k: u16
   ) -> Node {
     if n & INLINE_NODE_MASK != 0 {
@@ -313,13 +280,7 @@ impl Universe {
       let k = k.min(level - 2);
       let result = n.memo_results[k as usize];
       if result != INVALID_NODE {
-        self.unroot(node);
-        if level > 3 && result.0 & INLINE_NODE_MASK == 0 {
-          self.root(result);
-          return result;
-        } else {
-          return result;
-        }
+        return result;
       }
 
       let key = &n.key;
@@ -394,20 +355,6 @@ impl Universe {
           nw, ne, sw, se,
         });
         n.memo_results[k as usize] = result;
-        self.unroot(node);
-        self.unroot(nw);
-        self.unroot(ne);
-        self.unroot(sw);
-        self.unroot(se);
-        self.unroot(n0);
-        self.unroot(n1);
-        self.unroot(n2);
-        self.unroot(n3);
-        self.unroot(n4);
-        self.unroot(n5);
-        self.unroot(n6);
-        self.unroot(n7);
-        self.unroot(n8);
         result
       }
     }
@@ -427,10 +374,10 @@ impl Universe {
         node_value_ref(n1).level
       };
 
-      let nw = self.quadrant(Node(n1), |key| key.ne);
-      let sw = self.quadrant(Node(n1), |key| key.se);
-      let ne = self.quadrant(Node(n2), |key| key.nw);
-      let se = self.quadrant(Node(n2), |key| key.sw);
+      let nw = self.quadrant(n1, |key| key.ne);
+      let sw = self.quadrant(n1, |key| key.se);
+      let ne = self.quadrant(n2, |key| key.nw);
+      let se = self.quadrant(n2, |key| key.sw);
 
       self.new_node(level, NodeKey {
         nw, ne, sw, se,
@@ -452,10 +399,10 @@ impl Universe {
         node_value_ref(n1).level
       };
 
-      let nw = self.quadrant(Node(n1), |key| key.sw);
-      let ne = self.quadrant(Node(n1), |key| key.se);
-      let sw = self.quadrant(Node(n2), |key| key.nw);
-      let se = self.quadrant(Node(n2), |key| key.ne);
+      let nw = self.quadrant(n1, |key| key.sw);
+      let ne = self.quadrant(n1, |key| key.se);
+      let sw = self.quadrant(n2, |key| key.nw);
+      let se = self.quadrant(n2, |key| key.ne);
 
       self.new_node(level, NodeKey {
         nw, ne, sw, se,
@@ -499,10 +446,10 @@ impl Universe {
         node_value_ref(n4).level
       };
 
-      let nw = self.quadrant(Node(n1), |key| key.se);
-      let ne = self.quadrant(Node(n2), |key| key.sw);
-      let sw = self.quadrant(Node(n3), |key| key.ne);
-      let se = self.quadrant(Node(n4), |key| key.nw);
+      let nw = self.quadrant(n1, |key| key.se);
+      let ne = self.quadrant(n2, |key| key.sw);
+      let sw = self.quadrant(n3, |key| key.ne);
+      let se = self.quadrant(n4, |key| key.nw);
 
       self.new_node(level, NodeKey {
         nw, ne, sw, se,
@@ -513,7 +460,7 @@ impl Universe {
   #[inline]
   fn quadrant<F>(
     &self,
-    Node(n): Node,
+    n: u64,
     f: F,
   ) -> Node
   where
@@ -558,82 +505,6 @@ impl Universe {
     let result = Node(bits << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
     n.memo_results[0] = result;
     result
-  }
-
-  fn root(&mut self, n: Node) {
-    *self.root_set.entry(n).or_default() += 1;
-  }
-
-  fn unroot(&mut self, n: Node) {
-    match self.root_set.entry(n) {
-      Entry::Occupied(mut c) => {
-        *c.get_mut() -= 1;
-        if *c.get() == 0 {
-          self.root_set.remove(&n);
-        }
-      }
-      _ => {}
-    }
-  }
-
-  fn gc(&mut self) {
-    self.mark();
-    self.sweep();
-    self.gc_threshold = self.map.len() + self.map.len() / 3 + 1;
-    self.mark = !self.mark;
-  }
-
-  fn mark(&mut self) {
-    let mut stk = self.root_set.keys()
-      .map(|&Node(n)| node_value_ref_mut(n))
-      .collect_vec();
-
-    while let Some(n) = stk.pop() {
-      if n.mark == self.mark {
-        continue;
-      }
-
-      n.mark = self.mark;
-      if n.level <= 3 {
-        continue;
-      }
-
-      if n.key.nw.0 & INLINE_NODE_MASK == 0 {
-        stk.push(node_value_ref_mut(n.key.nw.0));
-      }
-      if n.key.ne.0 & INLINE_NODE_MASK == 0 {
-        stk.push(node_value_ref_mut(n.key.ne.0));
-      }
-      if n.key.sw.0 & INLINE_NODE_MASK == 0 {
-        stk.push(node_value_ref_mut(n.key.sw.0));
-      }
-      if n.key.se.0 & INLINE_NODE_MASK == 0 {
-        stk.push(node_value_ref_mut(n.key.se.0));
-      }
-
-      // TODO result is weak reference
-      for &n in n.memo_results.iter() {
-        if n != INVALID_NODE && n.0 & INLINE_NODE_MASK == 0 {
-          stk.push(node_value_ref_mut(n.0));
-        }
-      }
-    }
-  }
-
-  fn sweep(&mut self) {
-    let mut i = 0;
-    while i < self.map.len() {
-      let n = &*self.map[i];
-      if n.level == 2 || n.mark == self.mark {
-        i += 1;
-        continue;
-      }
-
-      let last = self.map.len() - 1;
-      self.map[last].index = i;
-
-      self.map.swap_remove_index(i);
-    }
   }
 
   /// Returns (left, top, right, bottom), right and bottom are exclusive.
@@ -855,7 +726,6 @@ mod tests {
   # 
     ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -877,7 +747,6 @@ mod tests {
         
         ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -890,7 +759,6 @@ mod tests {
     let node = uni.set(node, -1, 0);
     let node = uni.set(node, -1, 1);
     assert_eq!(uni.boundary(node, 0, 0), (-2, -1, 1, 2));
-    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -916,7 +784,6 @@ mod tests {
         
         ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -930,7 +797,6 @@ mod tests {
     let node = uni.set(node, -1, 1);
     let node = uni.step(node, 0);
     assert_eq!(node, Node(0b11 << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK));
-    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -949,7 +815,6 @@ mod tests {
 #   
 ##  ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 0);
 
     let node = uni.expand(node);
     let node = uni.step(node, 0);
@@ -959,7 +824,6 @@ mod tests {
   # 
 ##  ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -1080,7 +944,6 @@ mod tests {
   # 
 ##  ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 0);
   }
 
   #[test]
@@ -1103,7 +966,6 @@ mod tests {
         
         ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -1126,7 +988,6 @@ mod tests {
         
         ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -1157,7 +1018,6 @@ mod tests {
                 
                 ".trim_start_matches('\n'));
 
-    assert_eq!(uni.root_set.len(), 1);
   }
 
   #[test]
@@ -1169,10 +1029,8 @@ mod tests {
     let src = fs::read_to_string("tests/fixtures/Breeder.lif").unwrap();
     let node = rle::read(src, &mut uni);
 
-    assert_eq!(uni.root_set.len(), 1);
 
     let _node = uni.simulate(node, 1);
 
-    assert_eq!(uni.root_set.len(), 1);
   }
 }
