@@ -1,53 +1,13 @@
-use indexmap::IndexMap;
+use indexmap::IndexSet;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, BuildHasherDefault};
 use itertools::Itertools;
 use std::iter;
 
-/// Represents a node in a quadtree.
-///
-/// # Internals
-///
-/// If the lowest two bits of the internal value is zero, it's a pointer to an
-/// internal node, whose level is greater than or equal to 2.
-/// 
-/// If the lowest two bits are set, it's an empty node, and the rest bits
-/// represents the level of the node.  
-/// If only the lowest bit is set, it's an node of level one, i.e. an 2x2 node,
-/// and the rest bits represents the cells of the node, e.g., bit 2 represents
-/// the `(0, 0)` cell, bit 4 the `(0, 1)` cell, etc.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Node(u64);
-
 pub struct Universe {
-  map: IndexMap<NodeKey, Box<NodeValue>, BuildHasherDefault<FxHasher>>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct NodeKey {
-  nw: Node,
-  ne: Node,
-  sw: Node,
-  se: Node,
-}
-
-#[derive(Clone)]
-struct NodeValue {
-  key: NodeKey,
-
-  /// `level` >= 2
+  map: IndexSet<Box<Node>, BuildHasherDefault<FxHasher>>,
   level: u16,
-
-  /// The memoized results of `2 ^ k` steps, where `k` is the index of the slice.
-  ///
-  /// Maximal `k` is `level - 2`.
-  memo_results: Box<[Node]>,
 }
-
-const EMPTY_NODE_MASK: u64 = 0x2;
-const INLINE_NODE_MASK: u64 = 0x1;
-const INLINE_NODE_BIT_SHIFT: usize = 2;
-const INVALID_NODE: Node = Node(0);
 
 impl Universe {
   pub fn new() -> Self {
