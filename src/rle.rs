@@ -7,7 +7,8 @@ use crate::universe::*;
 pub fn read(
   src: impl AsRef<str>,
   univ: &mut Universe,
-) -> Node {
+) {
+  /*
   let header_re = Regex::new(r"^x = (\d+), y = (\d+)\b").unwrap();
   let mut src = src.as_ref();
 
@@ -203,4 +204,6 @@ bo$2bo$3o!
     ### 
         ".trim_start_matches('\n'));
   }
+  */
+  panic!()
 }

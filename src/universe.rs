@@ -1,22 +1,41 @@
 use indexmap::IndexSet;
 use rustc_hash::FxHasher;
-use std::hash::{Hash, BuildHasherDefault};
+use std::hash::BuildHasherDefault;
+use std::cell::Cell;
 use itertools::Itertools;
-use std::iter;
+use crate::node::*;
+use crate::rule::*;
 
 pub struct Universe {
-  map: IndexSet<Box<Node>, BuildHasherDefault<FxHasher>>,
+  set: IndexSet<Box<Node>, BuildHasherDefault<FxHasher>>,
+  root: NodeId,
+  empty_nodes: Vec<NodeId>,
   level: u16,
 }
 
 impl Universe {
-  pub fn new() -> Self {
-    Self {
-      map: IndexMap::default(),
-    }
+  pub fn new(rule: Rule) -> Self {
+    let mut uni = Self {
+      set: IndexSet::default(),
+      root: INVALID_NODE_ID,
+      empty_nodes: vec![INVALID_NODE_ID; 4],
+      level: 0,
+    };
+
+    let root = uni.find_node(NodeKey::Leaf(LeafNodeKey {
+      nw: 0,
+      ne: 0,
+      sw: 0,
+      se: 0,
+    }));
+    uni.root = root;
+    uni.level = 3;
+    uni.empty_nodes[3] = root;
+    uni
   }
 
   /// `num_gen` is number of generations.
+  /*
   pub fn simulate(&mut self, mut root: Node, mut num_gen: usize) -> Node {
     while self.level(root) < 3 {
       root = self.expand(root);
@@ -44,189 +63,198 @@ impl Universe {
 
     root
   }
+  */
 
-  fn level(&self, Node(n): Node) -> u16 {
-    if n & INLINE_NODE_MASK != 0 {
-      if n & EMPTY_NODE_MASK != 0 {
-        (n >> INLINE_NODE_BIT_SHIFT) as u16
-      } else {
-        1
+  fn find_node(&mut self, key: NodeKey) -> NodeId {
+    match self.set.get(&key) {
+      Some(node) => {
+        NodeId(&**node as *const Node as u64)
       }
-    } else {
-      node_value_ref(n).level
+      None => {
+        let node = match key {
+          NodeKey::Internal(key) => {
+            Box::new(Node::Internal {
+              key,
+              result: Cell::new(INVALID_NODE_ID),
+              mark: false,
+            })
+          }
+          NodeKey::Leaf(key) => {
+            Box::new(Node::Leaf {
+              key,
+              results: [0, 1],
+              mark: false,
+            })
+          }
+        };
+        let id = NodeId(&*node as *const Node as u64);
+        let new = self.set.insert(node);
+        debug_assert!(new);
+        id
+      }
     }
   }
 
-  pub fn new_empty_node(&self, level: u16) -> Node {
-    match level {
-      0 => {
-        panic!("level == 0")
-      }
-      1 => {
-        Node(INLINE_NODE_MASK)
-      }
-      _ => {
-        Node((level as u64) << INLINE_NODE_BIT_SHIFT | EMPTY_NODE_MASK | INLINE_NODE_MASK)
-      }
-    }
-  }
-
-  fn new_node(&mut self, level: u16, key: NodeKey) -> Node {
-    if key.nw.0 & EMPTY_NODE_MASK != 0 &&
-      key.ne.0 & EMPTY_NODE_MASK != 0 &&
-      key.sw.0 & EMPTY_NODE_MASK != 0 &&
-      key.se.0 & EMPTY_NODE_MASK != 0
+  pub fn set(&mut self, x: i64, y: i64, alive: bool) {
+    let mut radius = 1 << self.level - 1;
+    while x < -radius || x >= radius ||
+      y < -radius || y >= radius
     {
-      let level = (key.nw.0 >> INLINE_NODE_BIT_SHIFT) as u16;
-      return self.new_empty_node(level + 1);
+      self.expand();
+      radius <<= 1;
     }
 
-    if key.nw.0 == INLINE_NODE_MASK &&
-      key.ne.0 == INLINE_NODE_MASK &&
-      key.sw.0 == INLINE_NODE_MASK &&
-      key.se.0 == INLINE_NODE_MASK
-    {
-      return self.new_empty_node(2);
-    }
-
-    let new_node = self.map.entry(key.clone()).or_insert_with(|| {
-      Box::new(NodeValue {
-        key,
-        level,
-        memo_results: vec![INVALID_NODE; (level - 1) as usize].into_boxed_slice(),
-      })
-    });
-
-    let n = new_node.as_ref() as *const NodeValue as u64;
-    debug_assert!(n & 3 == 0);
-
-    let n = Node(n);
-
-    n
+    let root = self.root;
+    let level = self.level;
+    let root = self.set_rec(root, level, x, y, alive);
+    self.root = root;
   }
 
   /// `(x, y)` are coordinate relative to center of the node.
-  pub fn set(&mut self, Node(n): Node, x: i64, y: i64) -> Node {
-    let (old_key, level) = if n & INLINE_NODE_MASK != 0 {
-      if n & EMPTY_NODE_MASK != 0 {
-        let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
-        let sub_empty = self.new_empty_node(level - 1);
-        (NodeKey {
-          nw: sub_empty,
-          ne: sub_empty,
-          sw: sub_empty,
-          se: sub_empty,
-        }, level)
-      } else {
-        debug_assert!(x >= -1 && x < 1 && y >= -1 && y < 1);
-        let shift = (x + 1 + (y + 1) * 2) as usize + INLINE_NODE_BIT_SHIFT;
-        return Node(n | 1 << shift);
-      }
-    } else {
-      let n = node_value_ref(n);
-      let key = n.key.clone();
-      let level = n.level;
-      (key, level)
-    };
-
-    let radius = 1 << (level - 1);
-    let sub_radius = radius >> 1;
-    debug_assert!(x >= -radius && x < radius && y >= -radius && y < radius);
-
-    let new_quadrant;
-    let new_key = if y < 0 {
-      if x < 0 {
-        new_quadrant = self.set(old_key.nw, x + sub_radius, y + sub_radius);
-        NodeKey {
-          nw: new_quadrant,
-          ..old_key
+  fn set_rec(
+    &mut self,
+    node: NodeId,
+    level: u16,
+    x: i64,
+    y: i64,
+    alive: bool
+  ) -> NodeId {
+    match node_ref(node) {
+      Node::Leaf { key, .. } => {
+        debug_assert!(x >= -4 && x < 4 && y >= -4 && y < 4);
+        let mut new_key = key.clone();
+        let bits = if x < 0 {
+          if y < 0 {
+            &mut new_key.nw
+          } else {
+            &mut new_key.sw
+          }
+        } else {
+          if y < 0 {
+            &mut new_key.ne
+          } else {
+            &mut new_key.se
+          }
+        };
+        let mask = 1u16 << (3 - (x & 3)) + 4 * (3 - (y & 3));
+        if alive {
+          *bits |= mask;
+        } else {
+          *bits &= !mask;
         }
-      } else {
-        new_quadrant = self.set(old_key.ne, x - sub_radius, y + sub_radius);
-        NodeKey {
-          ne: new_quadrant,
-          ..old_key
-        }
+
+        self.find_node(NodeKey::Leaf(new_key))
       }
-    } else {
-      if x < 0 {
-        new_quadrant = self.set(old_key.sw, x + sub_radius, y - sub_radius);
-        NodeKey {
-          sw: new_quadrant,
-          ..old_key
+      Node::Internal { key, .. } => {
+        let r = 1i64 << level - 2;
+        let mut new_key = key.clone();
+        if y < 0 {
+          if x < 0 {
+            new_key.nw = self.set_rec(key.nw, level - 1, x + r, y + r, alive);
+          } else {
+            new_key.ne = self.set_rec(key.ne, level - 1, x - r, y + r, alive);
+          }
+        } else {
+          if x < 0 {
+            new_key.sw = self.set_rec(key.sw, level - 1, x + r, y - r, alive);
+          } else {
+            new_key.se = self.set_rec(key.se, level - 1, x - r, y - r, alive);
+          }
         }
-      } else {
-        new_quadrant = self.set(old_key.se, x - sub_radius, y - sub_radius);
-        NodeKey {
-          se: new_quadrant,
-          ..old_key
-        }
+
+        self.find_node(NodeKey::Internal(new_key))
       }
-    };
-
-    let new_node = self.new_node(level, new_key);
-    new_node
-  }
-
-  pub fn expand(&mut self, Node(n): Node) -> Node {
-    if n & INLINE_NODE_MASK != 0 {
-      if n & EMPTY_NODE_MASK != 0 {
-        let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
-        self.new_empty_node(level + 1)
-      } else {
-        let bits = (n >> INLINE_NODE_BIT_SHIFT) as u8 as u64;
-        let nw = Node(((bits & 0b0001) << 3) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-        let ne = Node(((bits & 0b0010) << 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-        let sw = Node(((bits & 0b0100) >> 1) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-        let se = Node(((bits & 0b1000) >> 3) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-
-        self.new_node(2, NodeKey {
-          nw, ne, sw, se,
-        })
-      }
-    } else {
-      let n = node_value_ref(n);
-      let key = &n.key;
-      let level = n.level;
-      let empty = self.new_empty_node(level - 1);
-
-      let nw = self.new_node(level, NodeKey {
-        nw: empty,
-        ne: empty,
-        sw: empty,
-        se: key.nw,
-      });
-      let ne = self.new_node(level, NodeKey {
-        nw: empty,
-        ne: empty,
-        sw: key.ne,
-        se: empty,
-      });
-      let sw = self.new_node(level, NodeKey {
-        nw: empty,
-        ne: key.sw,
-        sw: empty,
-        se: empty,
-      });
-      let se = self.new_node(level, NodeKey {
-        nw: key.se,
-        ne: empty,
-        sw: empty,
-        se: empty,
-      });
-
-      let new_node = self.new_node(level + 1, NodeKey {
-        nw, ne, sw, se,
-      });
-      new_node
     }
   }
 
-  pub fn mem(&self) -> usize {
-    self.map.len()
+  fn expand(&mut self) {
+    let nw;
+    let ne;
+    let sw;
+    let se;
+    match node_ref(self.root) {
+      Node::Leaf { key, .. } => {
+        nw = self.find_node(NodeKey::Leaf(LeafNodeKey {
+          se: key.nw,
+          ..Default::default()
+        }));
+        ne = self.find_node(NodeKey::Leaf(LeafNodeKey {
+          sw: key.ne,
+          ..Default::default()
+        }));
+        sw = self.find_node(NodeKey::Leaf(LeafNodeKey {
+          ne: key.sw,
+          ..Default::default()
+        }));
+        se = self.find_node(NodeKey::Leaf(LeafNodeKey {
+          nw: key.se,
+          ..Default::default()
+        }));
+      }
+      Node::Internal { key, .. } => {
+        let level = self.level;
+        let empty = self.find_empty_node(level - 1);
+        nw = self.find_node(NodeKey::Internal(InternalNodeKey {
+          nw: empty,
+          ne: empty,
+          sw: empty,
+          se: key.nw,
+        }));
+        ne = self.find_node(NodeKey::Internal(InternalNodeKey {
+          nw: empty,
+          ne: empty,
+          sw: key.ne,
+          se: empty,
+        }));
+        sw = self.find_node(NodeKey::Internal(InternalNodeKey {
+          nw: empty,
+          ne: key.sw,
+          sw: empty,
+          se: empty,
+        }));
+        se = self.find_node(NodeKey::Internal(InternalNodeKey {
+          nw: key.se,
+          ne: empty,
+          sw: empty,
+          se: empty,
+        }));
+      }
+    }
+    self.root = self.find_node(NodeKey::Internal(InternalNodeKey {
+      nw, ne, sw, se,
+    }));
+    self.level += 1;
   }
 
-  /// Move forward `2 ^ min(k, level - 2)` steps.
+  fn find_empty_node(&mut self, level: u16) -> NodeId {
+    let len = self.empty_nodes.len() ;
+    if len < level as usize + 1 {
+      for i in len..=level as usize {
+        let prev = self.empty_nodes[i - 1];
+        let node = self.find_node(NodeKey::Internal(InternalNodeKey {
+          nw: prev,
+          ne: prev,
+          sw: prev,
+          se: prev,
+        }));
+        match node_ref(node) {
+          Node::Internal { result, .. } => {
+            result.set(prev);
+          }
+          _ => unreachable!(),
+        }
+        self.empty_nodes.push(node);
+      }
+    }
+    self.empty_nodes[level as usize]
+  }
+
+  pub fn mem(&self) -> usize {
+    self.set.len()
+  }
+
+  // Move forward `2 ^ min(k, level - 2)` steps.
+  /*
   fn step(
     &mut self,
     Node(n): Node,
@@ -319,169 +347,19 @@ impl Universe {
       }
     }
   }
+  */
 
-  fn horizontal_center_node(
-    &mut self,
-    Node(n1): Node,
-    Node(n2): Node
-  ) -> Node {
-    if n1 & INLINE_NODE_MASK != 0 && n2 & INLINE_NODE_MASK != 0 {
-      Node(n1)
-    } else {
-      let level = if n1 & INLINE_NODE_MASK != 0 {
-        node_value_ref(n2).level
-      } else {
-        node_value_ref(n1).level
-      };
-
-      let nw = self.quadrant(n1, |key| key.ne);
-      let sw = self.quadrant(n1, |key| key.se);
-      let ne = self.quadrant(n2, |key| key.nw);
-      let se = self.quadrant(n2, |key| key.sw);
-
-      self.new_node(level, NodeKey {
-        nw, ne, sw, se,
-      })
-    }
-  }
-
-  fn vertical_center_node(
-    &mut self,
-    Node(n1): Node,
-    Node(n2): Node
-  ) -> Node {
-    if n1 & INLINE_NODE_MASK != 0 && n2 & INLINE_NODE_MASK != 0 {
-      Node(n1)
-    } else {
-      let level = if n1 & INLINE_NODE_MASK != 0 {
-        node_value_ref(n2).level
-      } else {
-        node_value_ref(n1).level
-      };
-
-      let nw = self.quadrant(n1, |key| key.sw);
-      let ne = self.quadrant(n1, |key| key.se);
-      let sw = self.quadrant(n2, |key| key.nw);
-      let se = self.quadrant(n2, |key| key.ne);
-
-      self.new_node(level, NodeKey {
-        nw, ne, sw, se,
-      })
-    }
-  }
-
-  fn center_node(
-    &mut self,
-    Node(n1): Node,
-    Node(n2): Node,
-    Node(n3): Node,
-    Node(n4): Node,
-  ) -> Node {
-    if n1 & INLINE_NODE_MASK != 0 &&
-      n2 & INLINE_NODE_MASK != 0 &&
-      n3 & INLINE_NODE_MASK != 0 &&
-      n4 & INLINE_NODE_MASK != 0
+  /// Returns (left, top, right, bottom), where right and bottom are exclusive.
+  fn boundary_rec(&self, node: NodeId, level: u16, ox: i64, oy: i64) -> Boundary {
+    if self.empty_nodes.len() > level as usize &&
+      node == self.empty_nodes[level as usize]
     {
-      if n1 & EMPTY_NODE_MASK != 0 {
-        debug_assert!(n2 & EMPTY_NODE_MASK != 0);
-        debug_assert!(n3 & EMPTY_NODE_MASK != 0);
-        debug_assert!(n4 & EMPTY_NODE_MASK != 0);
-        return Node(n1);
-      } else {
-        let n1 = (n1 >> INLINE_NODE_BIT_SHIFT) as u8;
-        let n2 = (n2 >> INLINE_NODE_BIT_SHIFT) as u8;
-        let n3 = (n3 >> INLINE_NODE_BIT_SHIFT) as u8;
-        let n4 = (n4 >> INLINE_NODE_BIT_SHIFT) as u8;
-        let bits = n1 >> 3 & 1 | n2 >> 1 & 2 | n3 << 1 & 4 | n4 << 3 & 8;
-        return Node((bits as u64) << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-      }
+      return EMPTY_BOUNDARY
     } else {
-      let level = if n1 & INLINE_NODE_MASK == 0 {
-        node_value_ref(n1).level
-      } else if n2 & INLINE_NODE_MASK == 0 {
-        node_value_ref(n2).level
-      } else if n3 & INLINE_NODE_MASK == 0 {
-        node_value_ref(n3).level
-      } else {
-        node_value_ref(n4).level
-      };
-
-      let nw = self.quadrant(n1, |key| key.se);
-      let ne = self.quadrant(n2, |key| key.sw);
-      let sw = self.quadrant(n3, |key| key.ne);
-      let se = self.quadrant(n4, |key| key.nw);
-
-      self.new_node(level, NodeKey {
-        nw, ne, sw, se,
-      })
-    }
-  }
-
-  #[inline]
-  fn quadrant<F>(
-    &self,
-    n: u64,
-    f: F,
-  ) -> Node
-  where
-    F: FnOnce(&NodeKey) -> Node
-  {
-    if n & INLINE_NODE_MASK != 0 {
-      self.empty_subnode(n)
-    } else {
-      f(&node_value_ref(n).key)
-    }
-  }
-
-  fn empty_subnode(&self, n: u64) -> Node {
-    if n & EMPTY_NODE_MASK != 0 {
-      let level = (n >> INLINE_NODE_BIT_SHIFT) as u16;
-      self.new_empty_node(level - 1)
-    } else {
-      unreachable!("{}", n)
-    }
-  }
-
-  fn one_step_level2(&mut self, n: &mut NodeValue) -> Node {
-    let nw = n.key.nw.0 as u64;
-    let ne = n.key.ne.0 as u64;
-    let sw = n.key.sw.0 as u64;
-    let se = n.key.se.0 as u64;
-    debug_assert!(nw & INLINE_NODE_MASK != 0);
-    debug_assert!(ne & INLINE_NODE_MASK != 0);
-    debug_assert!(sw & INLINE_NODE_MASK != 0);
-    debug_assert!(se & INLINE_NODE_MASK != 0);
-    let nw = nw >> INLINE_NODE_BIT_SHIFT;
-    let ne = ne >> INLINE_NODE_BIT_SHIFT;
-    let sw = sw >> INLINE_NODE_BIT_SHIFT;
-    let se = se >> INLINE_NODE_BIT_SHIFT;
-
-    let lv2_bits = (nw & 0b11) | (ne & 0b11) << 2;
-    let lv2_bits = lv2_bits | (nw & 0b1100) << 2 | (ne & 0b1100) << 4;
-    let lv2_bits = lv2_bits | (sw & 0b11) << 8 | (se & 0b11) << 10;
-    let lv2_bits = lv2_bits | (sw & 0b1100) << 10 | (se & 0b1100) << 12;
-    let bits = LEVEL2_RESULTS[lv2_bits as usize] as u64;
-
-    let result = Node(bits << INLINE_NODE_BIT_SHIFT | INLINE_NODE_MASK);
-    n.memo_results[0] = result;
-    result
-  }
-
-  /// Returns (left, top, right, bottom), right and bottom are exclusive.
-  pub fn boundary(&self, Node(n): Node, center_x: i64, center_y: i64) -> Boundary {
-    if n & INLINE_NODE_MASK != 0 {
-      if n & EMPTY_NODE_MASK != 0 {
-        EMPTY_BOUNDARY
-      } else {
-        let n = (n >> INLINE_NODE_BIT_SHIFT) as u16;
-        let b@(x0, y0, x1, y1) = LEVEL1_BOUNDARIES[n as usize];
-        if b == EMPTY_BOUNDARY {
-          b
-        } else {
-          (center_x + x0, center_y + y0, center_x + x1, center_y + y1)
+      match node_ref(node) {
+        Node::Leaf { key, .. } => {
         }
       }
-    } else {
       let n = node_value_ref(n);
       let key = &n.key;
       let level = n.level;
@@ -504,6 +382,7 @@ impl Universe {
     }
   }
 
+  /*
   pub fn write_cells<F>(
     &self,
     Node(n): Node,
@@ -555,160 +434,106 @@ impl Universe {
         center_x + sub_radius, center_y + sub_radius, boundary, f);
     }
   }
+  */
 
-  pub fn debug(&self, Node(n): Node) -> String {
-    if n & INLINE_NODE_MASK != 0 {
-      if n & EMPTY_NODE_MASK != 0 {
-        let n = (n >> INLINE_NODE_BIT_SHIFT) as u16;
-        let row = iter::repeat(' ').take(1 << n).collect::<String>();
-        iter::repeat(row).take(1 << n).join("\n")
-      } else {
-        let bits = (n >> INLINE_NODE_BIT_SHIFT) as u8;
-        format!("{}{}\n{}{}",
-          if bits & 1 != 0 { '#' } else { ' ' },
-          if bits & 2 != 0 { '#' } else { ' ' },
-          if bits & 4 != 0 { '#' } else { ' ' },
-          if bits & 8 != 0 { '#' } else { ' ' },
-        )
+  #[cfg(test)]
+  fn debug(&self, node: NodeId, level: u16) -> Vec<u128> {
+    match node_ref(node) {
+      Node::Leaf { key, .. } => {
+        vec![
+          (key.nw >> 8 & 0xf0 | key.ne >> 12 & 0xf) as u128,
+          (key.nw >> 4 & 0xf0 | key.ne >>  8 & 0xf) as u128,
+          (key.nw >> 0 & 0xf0 | key.ne >>  4 & 0xf) as u128,
+          (key.nw << 4 & 0xf0 | key.ne >>  0 & 0xf) as u128,
+          (key.sw >> 8 & 0xf0 | key.se >> 12 & 0xf) as u128,
+          (key.sw >> 4 & 0xf0 | key.se >>  8 & 0xf) as u128,
+          (key.sw >> 0 & 0xf0 | key.se >>  4 & 0xf) as u128,
+          (key.sw << 4 & 0xf0 | key.se >>  0 & 0xf) as u128,
+        ]
       }
-    } else {
-      let key = &node_value_ref(n).key;
-
-      let nw = self.debug(key.nw);
-      let ne = self.debug(key.ne);
-      let sw = self.debug(key.sw);
-      let se = self.debug(key.se);
-
-      let mut lines: Vec<_> = nw.lines().zip(ne.lines())
-        .map(|(a,b)| format!("{}{}", a, b))
-        .collect();
-      lines.extend(sw.lines().zip(se.lines())
-        .map(|(a,b)| format!("{}{}", a, b)));
-
-      lines.join("\n")
+      Node::Internal { key, .. } => {
+        let r = 1 << level - 1;
+        let nw = self.debug(key.nw, level - 1);
+        let ne = self.debug(key.ne, level - 1);
+        let sw = self.debug(key.sw, level - 1);
+        let se = self.debug(key.se, level - 1);
+        nw.into_iter().zip(ne)
+          .chain(sw.into_iter().zip(se))
+          .map(|(x, y)| x << r | y)
+          .collect_vec()
+      }
     }
   }
 }
 
-fn node_value_ref(n: u64) -> &'static NodeValue {
-  unsafe { std::mem::transmute(n) }
-}
-
-fn node_value_ref_mut(n: u64) -> &'static mut NodeValue {
+fn node_ref(NodeId(n): NodeId) -> &'static Node {
   unsafe { std::mem::transmute(n) }
 }
 
 type Boundary = (i64, i64, i64, i64);
 
-static LEVEL2_RESULTS: [u8; 65536] = compute_level2_results();
-
 const EMPTY_BOUNDARY: Boundary = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
-
-static LEVEL1_BOUNDARIES: [Boundary; 16] = compute_level1_boundaries();
-
-const fn compute_level1_boundaries() -> [Boundary; 16] {
-  let mut output = [EMPTY_BOUNDARY; 16];
-
-  let mut i = 1;
-  while i < 16 {
-    let (x0, x1) = if i & 0b0101 != 0 {
-      if i & 0b1010 != 0 {
-        (-1, 1)
-      } else {
-        (-1, 0)
-      }
-    } else if i & 0b1010 != 0 {
-      (0, 1)
-    } else {
-      (i64::MAX, i64::MIN)
-    };
-
-    let (y0, y1) = if i & 0b0011 != 0 {
-      if i & 0b1100 != 0 {
-        (-1, 1)
-      } else {
-        (-1, 0)
-      }
-    } else if i & 0b1100 != 0 {
-      (0, 1)
-    } else {
-      (i64::MAX, i64::MIN)
-    };
-
-    output[i] = (x0, y0, x1, y1);
-    i += 1;
-  }
-
-  output
-}
-
-const fn compute_level2_results() -> [u8; 65536] {
-  let mut output = [0u8; 65536];
-
-  let mut i = 1usize;
-  while i < 65536 {
-
-    const fn new_bit(i: usize, mask: usize, offset: usize) -> u8 {
-      let num = (i & mask).count_ones();
-      if num == 3 {
-        1
-      } else if num == 2 {
-        ((i >> offset) & 1) as u8
-      } else {
-        0
-      }
-    }
-
-    let b0 = new_bit(i, 0b0111_0101_0111, 5);
-    let b1 = new_bit(i, 0b1110_1010_1110, 6);
-    let b2 = new_bit(i, 0b0111_0101_0111_0000, 9);
-    let b3 = new_bit(i, 0b1110_1010_1110_0000, 10);
-    output[i] = b0 | b1 << 1 | b2 << 2 | b3 << 3;
-    i += 1;
-  }
-
-  output
-}
 
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn test_debug() {
-    let mut uni = Universe::new();
-    let node = uni.new_empty_node(2);
-    let node = uni.set(node, -1, -1);
-    let node = uni.set(node, 0, 0);
-    assert_eq!(&uni.debug(node), r"
-    
- #  
-  # 
-    ".trim_start_matches('\n'));
-
-  }
+  use pretty_assertions::assert_eq;
 
   #[test]
   fn test_debug_level3() {
-    let mut uni = Universe::new();
-    let node = uni.new_empty_node(3);
-    let node = uni.set(node, -1, -1);
-    let node = uni.set(node, 0, -1);
-    let node = uni.set(node, -2, 0);
-    let node = uni.set(node, -1, 0);
-    let node = uni.set(node, -1, 1);
-    assert_eq!(&uni.debug(node), r"
-        
-        
-        
-   ##   
-  ##    
-   #    
-        
-        ".trim_start_matches('\n'));
+    let mut uni = Universe::new(crate::rule::GAME_OF_LIFE);
+    uni.set(-1, -1, true);
+    uni.set(0, 0, true);
+    assert_eq!(uni.debug(uni.root, uni.level),
+      vec![
+        0b_0000_0000,
+        0b_0000_0000,
+        0b_0000_0000,
+        0b_0001_0000,
 
+        0b_0000_1000,
+        0b_0000_0000,
+        0b_0000_0000,
+        0b_0000_0000,
+      ]);
   }
 
+  #[test]
+  fn test_debug_level4() {
+    let mut uni = Universe::new(crate::rule::GAME_OF_LIFE);
+    uni.set(-7, -7, true);
+    uni.set(0, -6, true);
+    uni.set(-3, 0, true);
+    uni.set(-1, 0, true);
+    uni.set(-3, 1, true);
+    uni.set(3, 1, true);
+    uni.set(6, 3, true);
+    uni.set(4, 6, true);
+    assert_eq!(uni.debug(uni.root, uni.level),
+      vec![
+        0b_0000_0000_0000_0000,
+        0b_0100_0000_0000_0000,
+        0b_0000_0000_1000_0000,
+        0b_0000_0000_0000_0000,
+
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+
+        0b_0000_0101_0000_0000,
+        0b_0000_0100_0001_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0010,
+
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_1000,
+        0b_0000_0000_0000_0000,
+      ]);
+  }
+
+  /*
   #[test]
   fn test_boundary() {
     let mut uni = Universe::new();
@@ -993,4 +818,5 @@ mod tests {
     let _node = uni.simulate(node, 1);
 
   }
+  */
 }

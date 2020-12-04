@@ -2,15 +2,18 @@ use std::fs;
 use hashlife::universe::*;
 use hashlife::rle;
 use hashlife::export;
+use hashlife::rule;
 
 fn main() {
-    let mut uni = Universe::new();
+    let mut uni = Universe::new(rule::GAME_OF_LIFE);
     let src = fs::read_to_string("tests/fixtures/Breeder.lif").unwrap();
     let node = rle::read(src, &mut uni);
 
+    /*
     let node = uni.simulate(node, 100_0000);
     // 75639
     println!("{}", uni.mem());
+    */
 
     //let rle = rle::write(&uni, node);
     //fs::write("suck.rle", rle).unwrap();

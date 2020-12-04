@@ -2,7 +2,8 @@ use std::path::Path;
 use image::{ImageBuffer, Luma};
 use crate::universe::*;
 
-pub fn save_image(uni: &Universe, node: Node, path: impl AsRef<Path>) {
+pub fn save_image(uni: &Universe, path: impl AsRef<Path>) {
+  /*
   let b@(x0, y0, x1, y1) = uni.boundary(node, 0, 0);
   if x1 <= x0 {
     panic!("empty");
@@ -32,4 +33,6 @@ pub fn save_buffer(uni: &Universe, node: Node) -> Vec<Vec<u32>> {
   });
 
   buffer
+  */
+  panic!()
 }
