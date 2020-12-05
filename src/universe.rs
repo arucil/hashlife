@@ -10,15 +10,23 @@ pub struct Universe {
   set: IndexSet<Box<Node>, BuildHasherDefault<FxHasher>>,
   root: NodeId,
   empty_nodes: Vec<NodeId>,
+  /// result is a 2x2 square, whose cell is arranged as follows
+  /// ```ignored
+  /// bit 7 ...  5  4  3  2  1  0
+  ///     -     NW NE  -  - SW SE
+  /// ```
+  level2_results: [u8; 65536],
   level: u16,
 }
 
 impl Universe {
   pub fn new(rule: Rule) -> Self {
+    let level2_results = compute_level2_results(rule);
     let mut uni = Self {
       set: IndexSet::default(),
       root: INVALID_NODE_ID,
       empty_nodes: vec![INVALID_NODE_ID; 4],
+      level2_results,
       level: 0,
     };
 
@@ -80,9 +88,10 @@ impl Universe {
             })
           }
           NodeKey::Leaf(key) => {
+            let results = self.compute_level3_results(key.clone());
             Box::new(Node::Leaf {
               key,
-              results: [0, 1],
+              results,
               mark: false,
             })
           }
@@ -93,6 +102,20 @@ impl Universe {
         id
       }
     }
+  }
+
+  fn compute_level3_results(&self, key: LeafNodeKey) -> [u16; 2] {
+    let n0 = self.level2_results[key.nw as usize];
+    let nn = key.nw << 4 & 0xcccc | key.ne >> 4 & 3333;
+    let n1 = self.level2_results[nn as usize];
+    let n2 = self.level2_results[key.ne as usize];
+    let ww = key.nw << 8 | key.sw >> 8;
+    let n3 = self.level2_results[ww as usize];
+    let cc = self.nw << 10 & 
+    let ee = key.ne << 8 | key.se >> 8;
+    let n5 = self.level2_results[ee as usize];
+    let n6 = self.level2_results[key.sw as usize];
+    let n8 = self.level2_results[key.se as usize];
   }
 
   pub fn set(&mut self, x: i64, y: i64, alive: bool) {
@@ -349,36 +372,49 @@ impl Universe {
   }
   */
 
+  fn boundary(&self) -> Boundary {
+    self.boundary_rec(self.root, self.level, 0, 0)
+  }
+
   /// Returns (left, top, right, bottom), where right and bottom are exclusive.
   fn boundary_rec(&self, node: NodeId, level: u16, ox: i64, oy: i64) -> Boundary {
     if self.empty_nodes.len() > level as usize &&
       node == self.empty_nodes[level as usize]
     {
-      return EMPTY_BOUNDARY
+      EMPTY_BOUNDARY
     } else {
       match node_ref(node) {
         Node::Leaf { key, .. } => {
+          let w = key.nw | key.sw;
+          let w = (w >> 8 | w >> 4 | w | w << 4 ) & 0xf0;
+          let e = key.ne | key.se;
+          let e = (e >> 12 | e >> 8 | e >> 4 | e) & 0xf;
+          let row = w | e;
+          let (left, right) = BYTE_RANGE[row as usize];
+
+          let n = key.nw | key.ne;
+          let n = n | n >> 1 | n >> 2 | n >> 3;
+          let s = key.sw | key.se;
+          let s = s | s >> 1 | s >> 2 | s >> 3;
+          let col = n >> 5 & 0x80 | n >> 2 & 0x40 | n << 1 & 0x20 | n << 4 & 0x10 |
+            s >> 9 & 0x8 | s >> 6 & 0x4 | s >> 3 & 0x2 | s & 0x1;
+          let (top, bottom) = BYTE_RANGE[col as usize];
+
+          (left + ox, top + oy, right + ox, bottom + oy)
+        }
+        Node::Internal { key, .. } => {
+          let r = 1 << level - 2;
+          let nw_bound = self.boundary_rec(key.nw, level - 1, ox - r, oy - r);
+          let ne_bound = self.boundary_rec(key.ne, level - 1, ox + r, oy - r);
+          let sw_bound = self.boundary_rec(key.sw, level - 1, ox - r, oy + r);
+          let se_bound = self.boundary_rec(key.se, level - 1, ox + r, oy + r);
+          let left = nw_bound.0.min(ne_bound.0).min(sw_bound.0).min(se_bound.0);
+          let right = nw_bound.2.max(ne_bound.2).max(sw_bound.2).max(se_bound.2);
+          let top = nw_bound.1.min(ne_bound.1).min(sw_bound.1).min(se_bound.1);
+          let bottom = nw_bound.3.max(ne_bound.3).max(sw_bound.3).max(se_bound.3);
+          (left, top, right, bottom)
         }
       }
-      let n = node_value_ref(n);
-      let key = &n.key;
-      let level = n.level;
-      let sub_radius = 1 << (level - 2);
-      let nw_bound = self.boundary(key.nw,
-        center_x - sub_radius, center_y - sub_radius);
-      let ne_bound = self.boundary(key.ne,
-        center_x + sub_radius, center_y - sub_radius);
-      let sw_bound = self.boundary(key.sw,
-        center_x - sub_radius, center_y + sub_radius);
-      let se_bound = self.boundary(key.se,
-        center_x + sub_radius, center_y + sub_radius);
-
-      let x0 = nw_bound.0.min(ne_bound.0).min(sw_bound.0).min(se_bound.0);
-      let x1 = nw_bound.2.max(ne_bound.2).max(sw_bound.2).max(se_bound.2);
-      let y0 = nw_bound.1.min(ne_bound.1).min(sw_bound.1).min(se_bound.1);
-      let y1 = nw_bound.3.max(ne_bound.3).max(sw_bound.3).max(se_bound.3);
-
-      (x0, y0, x1, y1)
     }
   }
 
@@ -474,6 +510,37 @@ type Boundary = (i64, i64, i64, i64);
 
 const EMPTY_BOUNDARY: Boundary = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
 
+const BYTE_RANGE: [(i64, i64); 256] = compute_byte_range();
+
+const fn compute_byte_range() -> [(i64, i64); 256] {
+  let mut result = [(0i64, 0i64); 256];
+  let mut i = 1;
+  result[0] = (i64::MAX, i64::MIN);
+  while i < 256 {
+    let low = (i as u8).leading_zeros() as i64 - 4;
+    let high = 4 - (i as u8).trailing_zeros() as i64;
+    result[i as usize] = (low, high);
+    i += 1;
+  }
+  result
+}
+
+fn compute_level2_results(rule: Rule) -> [u8; 65536] {
+  let next = rule.birth as u16 | (rule.survival as u16) << 1;
+
+  let mut result = [0u8; 65536];
+  for i in 0..65536usize {
+    let j = i as u16;
+    let nw = (next >> (j & 0b_1110_1110_1110_0000).count_ones()) & 1;
+    let ne = (next >> (j & 0b_0111_0111_0111_0000).count_ones()) & 1;
+    let sw = (next >> (j & 0b_0000_1110_1110_1110).count_ones()) & 1;
+    let se = (next >> (j & 0b_0000_0111_0111_0111).count_ones()) & 1;
+    let res = nw << 5 | ne << 4 | sw << 1 | se;
+    result[i] = res as u8;
+  }
+  result
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -533,44 +600,32 @@ mod tests {
       ]);
   }
 
+  #[test]
+  fn test_boundary_level3() {
+    let mut uni = Universe::new(crate::rule::GAME_OF_LIFE);
+    uni.set(-3, -1, true);
+    uni.set(0, -2, true);
+    uni.set(-2, 0, true);
+    uni.set(-1, 0, true);
+    uni.set(-1, 2, true);
+    assert_eq!(uni.boundary(), (-3, -2, 1, 3));
+  }
+
+  #[test]
+  fn test_boundary_level4() {
+    let mut uni = Universe::new(crate::rule::GAME_OF_LIFE);
+    uni.set(-3, -1, true);
+    uni.set(0, -2, true);
+    uni.set(-2, 0, true);
+    uni.set(4, 0, true);
+    uni.set(-6, 3, true);
+    uni.set(2, 1, true);
+    uni.set(-1, 0, true);
+    uni.set(-1, 2, true);
+    assert_eq!(uni.boundary(), (-6, -2, 5, 4));
+  }
+
   /*
-  #[test]
-  fn test_boundary() {
-    let mut uni = Universe::new();
-    let node = uni.new_empty_node(3);
-    let node = uni.set(node, -1, -1);
-    let node = uni.set(node, 0, -1);
-    let node = uni.set(node, -2, 0);
-    let node = uni.set(node, -1, 0);
-    let node = uni.set(node, -1, 1);
-    assert_eq!(uni.boundary(node, 0, 0), (-2, -1, 1, 2));
-  }
-
-  #[test]
-  fn test_expand() {
-    let mut uni = Universe::new();
-    let node = uni.new_empty_node(2);
-    let node = uni.set(node, -2, -2);
-    let node = uni.set(node, -1, -1);
-    let node = uni.set(node, 0, 0);
-    let node = uni.set(node, 1, 1);
-    let node = uni.set(node, 0, -1);
-    let node = uni.set(node, -1, 0);
-    let node = uni.set(node, -2, 1);
-    let node = uni.set(node, 1, -2);
-    let node = uni.expand(node);
-    assert_eq!(&uni.debug(node), r"
-        
-        
-  #  #  
-   ##   
-   ##   
-  #  #  
-        
-        ".trim_start_matches('\n'));
-
-  }
-
   #[test]
   fn test_one_step_level2() {
     let mut uni = Universe::new();

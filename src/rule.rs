@@ -1,11 +1,11 @@
 
 #[derive(Debug, Clone, Copy)]
 pub struct Rule {
-  pub(crate) birth: NumNeighborMask,
-  pub(crate) survival: NumNeighborMask,
+  pub(crate) birth: NeighborMask,
+  pub(crate) survival: NeighborMask,
 }
 
-pub(crate) type NumNeighborMask = u16;
+pub(crate) type NeighborMask = u16;
 
 pub const GAME_OF_LIFE: Rule = Rule {
   birth: 0b000001000,
