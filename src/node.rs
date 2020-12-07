@@ -7,17 +7,23 @@ pub(crate) struct NodeId(pub(crate) u64);
 
 #[derive(Clone, Debug, Eq)]
 pub(crate) enum Node {
-  Internal {
-    key: InternalNodeKey,
-    result: Cell<NodeId>,
-    mark: bool,
-  },
-  Leaf {
-    key: LeafNodeKey,
+  Internal(InternalNode),
+  Leaf(LeafNode),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LeafNode {
+  pub(crate) key: LeafNodeKey,
   /// Results after one generation and two generations.
-    results: [u16; 2],
-    mark: bool,
-  }
+  pub(crate) results: [u16; 2],
+  pub(crate) mark: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InternalNode {
+  pub(crate) key: InternalNodeKey,
+  pub(crate) result: Cell<NodeId>,
+  pub(crate) mark: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -60,11 +66,11 @@ pub(crate) const INVALID_NODE_ID: NodeId = NodeId(0);
 impl Hash for Node {
   fn hash<H: Hasher>(&self, state: &mut H) {
     match self {
-      Node::Internal { key, .. } => {
+      Node::Internal(InternalNode { key, .. }) => {
         key.hash(state);
         0.hash(state);
       }
-      Node::Leaf { key, .. } => {
+      Node::Leaf(LeafNode { key, .. }) => {
         key.hash(state);
         1.hash(state);
       }
@@ -90,10 +96,10 @@ impl Hash for NodeKey {
 impl Equivalent<Box<Node>> for NodeKey {
   fn equivalent(&self, key: &Box<Node>) -> bool {
     match (self, key) {
-      (NodeKey::Internal(key1), box Node::Internal { key: key2, .. }) => {
+      (NodeKey::Internal(key1), box Node::Internal(InternalNode { key: key2, .. })) => {
         key1 == key2
       }
-      (NodeKey::Leaf(key1), box Node::Leaf { key: key2, .. }) => {
+      (NodeKey::Leaf(key1), box Node::Leaf(LeafNode { key: key2, .. })) => {
         key1 == key2
       }
       _ => false,
@@ -104,13 +110,68 @@ impl Equivalent<Box<Node>> for NodeKey {
 impl PartialEq<Node> for Node {
   fn eq(&self, other: &Node) -> bool {
     match (self, other) {
-      (Node::Internal { key: key1, .. }, Node::Internal { key: key2, .. }) => {
+      (Node::Internal(InternalNode { key: key1, .. }),
+        Node::Internal(InternalNode { key: key2, .. }))
+      => {
         key1 == key2
       }
-      (Node::Leaf { key: key1, .. }, Node::Leaf { key: key2, .. }) => {
+      (Node::Leaf(LeafNode { key: key1, .. }),
+        Node::Leaf(LeafNode { key: key2, .. }))
+      => {
         key1 == key2
       }
       _ => false,
     }
+  }
+}
+
+impl Node {
+  pub(crate) fn new_leaf(key: LeafNodeKey, results: [u16; 2]) -> Node {
+    Node::Leaf(LeafNode {
+      key,
+      results,
+      mark: false,
+    })
+  }
+
+  pub(crate) fn new_internal(key: InternalNodeKey) -> Node {
+    Node::Internal(InternalNode {
+      key,
+      result: Cell::new(INVALID_NODE_ID),
+      mark: false,
+    })
+  }
+
+  pub(crate) fn unwrap_leaf_ref(&self) -> &LeafNode {
+    match self {
+      Node::Leaf(node) => node,
+      Node::Internal(_) => panic!("internal node"),
+    }
+  }
+
+  pub(crate) fn unwrap_internal_ref(&self) -> &InternalNode {
+    match self {
+      Node::Internal(node) => node,
+      Node::Leaf(_) => panic!("leaf node"),
+    }
+  }
+}
+
+impl NodeKey {
+  pub(crate) fn new_leaf(nw: u16, ne: u16, sw: u16, se: u16) -> Self {
+    Self::Leaf(LeafNodeKey { nw, ne, sw, se })
+  }
+
+  pub(crate) fn new_internal(
+    nw: NodeId, ne: NodeId, sw: NodeId, se: NodeId
+  ) -> Self {
+    Self::Internal(InternalNodeKey { nw, ne, sw, se })
+  }
+}
+
+impl LeafNodeKey {
+  pub(crate) fn center(&self) -> u16 {
+    self.nw << 10 & 0xcc00 | self.ne << 6 & 0x3300 |
+      self.sw >> 6 & 0x00cc | self.se >> 10 & 0x0033
   }
 }
