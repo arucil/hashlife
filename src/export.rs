@@ -5,7 +5,6 @@ use crate::universe::*;
 
 pub fn save_image(uni: &Universe, path: impl AsRef<Path>) {
   let buffer = write_buffer(uni);
-  println!("{:?}", buffer);
 
   let mut f = OpenOptions::new()
     .write(true)
@@ -43,12 +42,12 @@ pub(crate) fn write_buffer(uni: &Universe) -> Vec<Vec<u8>> {
     panic!("empty");
   }
 
-
+  let level = crate::node::node_ref(uni.root).level();
   let w = right - left;
   let h = (bottom - top) as usize;
   let bw = w + 7 >> 3;
   let mut buffer = vec![vec![0u8; bw as usize]; h];
-  let shift = left.rem_euclid(8);
+  let shift = (if level == 3 { left + 4 } else { left }).rem_euclid(8);
 
   uni.write_cells(|nw, ne, sw, se, x0, y0| {
     let bytes = [
@@ -67,16 +66,19 @@ pub(crate) fn write_buffer(uni: &Universe) -> Vec<Vec<u8>> {
     let y = y0 - top;
     if shift == 0 {
       for i in 0..8 {
-        buffer[y as usize + i][bx0 as usize] = bytes[i];
+        if y + i >= 0 && y + i < h as i64 {
+          buffer[(y + i) as usize][bx0 as usize] = bytes[i as usize];
+        }
       }
     } else {
       for i in 0..8 {
         if y + i >= 0 && y + i < h as i64 {
           let b = bytes[i as usize];
-          println!("-------------{}  {} {:08b} {:08b}", shift, bx1, b, b>>shift);
-          buffer[(y + i) as usize][bx1 as usize] |= b >> shift;
+          if bx1 < bw {
+            buffer[(y + i) as usize][bx1 as usize] |= b << shift;
+          }
           if bx0 >= 0 {
-            buffer[(y + i) as usize][bx0 as usize] |= b << 8 - shift;
+            buffer[(y + i) as usize][bx0 as usize] |= b >> 8 - shift;
           }
         }
       }

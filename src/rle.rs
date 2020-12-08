@@ -8,27 +8,36 @@ use crate::universe::*;
 pub fn read(
   src: impl AsRef<str>,
 ) -> Universe {
-  let header_re = Regex::new(
-    r"^x *= *(\d+) *, *y *= *(\d+) *(?:, *rule *= *(\w+))?(?m:$)"
-  ).unwrap();
   let mut src = src.as_ref();
+  let header = src.lines().next().unwrap()
+    .split(",")
+    .map(|s| s.trim());
 
-  let width: u32;
-  let height: u32;
-  let rule: Rule;
-  if let Some(caps) = header_re.captures(src) {
-    width = caps.get(1).unwrap().as_str().parse().unwrap();
-    height = caps.get(2).unwrap().as_str().parse().unwrap();
-    rule = if let Some(m) = caps.get(3) {
-      parse_rule(m.as_str())
-    } else {
-      GAME_OF_LIFE
-    };
-    assert!(width > 0, "invalid x");
-    assert!(height > 0, "invalid y");
-  } else {
-    panic!("invalid header line");
+  let mut width = None::<u32>;
+  let mut height = None::<u32>;
+  let mut rule = None::<Rule>;
+  for w in header {
+    let kv = w.split("=").map(|s| s.trim()).collect::<Vec<_>>();
+    if kv.len() != 2 {
+      panic!("invalid header line");
+    }
+    match &kv[0][..] {
+      "x" => {
+        width = Some(kv[1].parse().expect("invalid x"));
+      }
+      "y" => {
+        height = Some(kv[1].parse().expect("invalid y"));
+      }
+      "rule" => {
+        rule = Some(parse_rule(&kv[1]));
+      }
+      _ => {}
+    }
   }
+
+  let _width = width.expect("missing x in header line");
+  let _height = height.expect("missing y in header line");
+  let rule = rule.unwrap_or(GAME_OF_LIFE);
 
   let mut uni = Universe::new(rule);
   src = &src[src.find('\n').unwrap_or(src.len())..];
@@ -116,11 +125,10 @@ fn parse_rule(s: &str) -> Rule {
 pub fn write(
   univ: &Universe,
 ) -> String {
-  /*
-  let (x0, y0, x1, y1) = univ.boundary(node, 0, 0);
-  let width = (x1 - x0) as u32;
-  let mut output = format!("x = {}, y = {}, rule = B3/S23\n", width, y1 - y0);
-  let data = crate::export::save_buffer(univ, node);
+  let (left, top, right, bottom) = univ.boundary();
+  let width = (right - left) as u32;
+  let mut output = format!("x = {}, y = {}, rule = B3/S23\n", width, bottom - top);
+  let data = crate::export::write_buffer(univ);
 
   let mut num_consec_next_rows = 0;
   for row in data {
@@ -128,7 +136,7 @@ pub fn write(
     let mut num_unit = 0;
     let mut row_left_bits = width;
     for mut x in row {
-      let mut left_bits = 32;
+      let mut left_bits = 8;
       while left_bits != 0 && row_left_bits != 0 {
         let num_new_unit;
         let new_unit = if x & 1 == 0 {
@@ -140,7 +148,7 @@ pub fn write(
         };
         left_bits -= num_new_unit;
         row_left_bits -= num_new_unit;
-        if num_new_unit == 32 {
+        if num_new_unit == 8 {
           x = 0;
         } else {
           x >>= num_new_unit;
@@ -185,8 +193,6 @@ pub fn write(
   output.push('!');
   output.push('\n');
   output
-  */
-  panic!()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
