@@ -23,6 +23,8 @@ pub(crate) struct LeafNode {
 pub(crate) struct InternalNode {
   pub(crate) key: InternalNodeKey,
   pub(crate) result: Cell<NodeId>,
+  /// `2 ^ level` cells on both sides of a root square.
+  pub(crate) level: u16,
   pub(crate) mark: bool,
 }
 
@@ -135,9 +137,11 @@ impl Node {
   }
 
   pub(crate) fn new_internal(key: InternalNodeKey) -> Node {
+    let level = node_ref(key.nw).level() + 1;
     Node::Internal(InternalNode {
       key,
       result: Cell::new(INVALID_NODE_ID),
+      level,
       mark: false,
     })
   }
@@ -153,6 +157,13 @@ impl Node {
     match self {
       Node::Internal(node) => node,
       Node::Leaf(_) => panic!("leaf node"),
+    }
+  }
+
+  pub(crate) fn level(&self) -> u16 {
+    match self {
+      Node::Internal(node) => node.level,
+      Node::Leaf(_) => 3,
     }
   }
 }
@@ -174,4 +185,8 @@ impl LeafNodeKey {
     self.nw << 10 & 0xcc00 | self.ne << 6 & 0x3300 |
       self.sw >> 6 & 0x00cc | self.se >> 10 & 0x0033
   }
+}
+
+pub(crate) fn node_ref(NodeId(n): NodeId) -> &'static Node {
+  unsafe { std::mem::transmute(n) }
 }

@@ -1,5 +1,5 @@
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Rule {
   birth: NeighborMask,
   survival: NeighborMask,
@@ -26,4 +26,23 @@ pub(crate) fn compute_level2_results(rule: Rule) -> [u8; 65536] {
     result[i] = res as u8;
   }
   result
+}
+
+impl Rule {
+  pub(crate) fn new() -> Self {
+    Self::default()
+  }
+
+  pub(crate) fn set_birth(&mut self, num: u8) {
+    assert!(num < 9);
+    if num == 0 {
+      panic!("B0 is not allowed for HashLife");
+    }
+    self.birth |= 1 << num;
+  }
+
+  pub(crate) fn set_survival(&mut self, num: u8) {
+    assert!(num < 9);
+    self.survival |= 1 << num;
+  }
 }

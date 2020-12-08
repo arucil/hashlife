@@ -6,15 +6,14 @@ use crate::rule::*;
 
 pub struct Universe {
   set: IndexSet<Box<Node>, BuildHasherDefault<FxHasher>>,
-  root: NodeId,
+  pub(crate) root: NodeId,
   empty_nodes: Vec<NodeId>,
-  /// result is a 2x2 square, whose cell is arranged as follows
+  /// result is a 2x2 square, whose cells are arranged as follows
   /// ```ignored
   /// bit 7 ...  5  4  3  2  1  0
   ///     -     NW NE  -  - SW SE
   /// ```
   level2_results: [u8; 65536],
-  level: u16,
 }
 
 impl Universe {
@@ -25,37 +24,42 @@ impl Universe {
       root: INVALID_NODE_ID,
       empty_nodes: vec![INVALID_NODE_ID; 4],
       level2_results,
-      level: 0,
     };
 
     let root = uni.find_node(NodeKey::new_leaf(0, 0, 0, 0));
     uni.root = root;
-    uni.level = 3;
     uni.empty_nodes[3] = root;
     uni
   }
 
   /// `num_gen` is number of generations.
   pub fn simulate(&mut self, mut num_gen: usize) {
-    while num_gen != 0 {
-      let k = num_gen.trailing_zeros() as u16;
+    if num_gen == 0 {
+      return;
+    }
 
+    let mut k = num_gen.trailing_zeros() as u16;
+
+    loop {
       // we need to advance `2 ^ min(k, level - 3)` generations, instead of
       // `2 ^ min(k, level - 2)` generations, because the latter can cause the
       // leakage of information of the RESULT macro-cell.
-      while self.level < 4.max(k + 3) {
+      while node_ref(self.root).level() < 4.max(k + 3) {
         self.expand();
       }
 
       num_gen &= num_gen - 1;
-      self.root = self.step(self.root, self.level, k);
+      self.root = self.step(self.root, k);
 
-      self.clear_results(self.root, self.level, k);
-
-      // shrink() must be called after clear_results(), because the nodes
-      // dropped by shrink() may be reused later, and the cached result of these
-      // nodes will be invalidated.
       self.shrink();
+
+      if num_gen == 0 {
+        break;
+      }
+
+      let old_k = k;
+      k = num_gen.trailing_zeros() as u16;
+      self.clear_results(old_k, k);
     }
   }
 
@@ -125,7 +129,7 @@ impl Universe {
   }
 
   pub fn set(&mut self, x: i64, y: i64, alive: bool) {
-    let mut radius = 1 << self.level - 1;
+    let mut radius = 1 << node_ref(self.root).level() - 1;
     while x < -radius || x >= radius ||
       y < -radius || y >= radius
     {
@@ -133,7 +137,7 @@ impl Universe {
       radius <<= 1;
     }
 
-    let root = self.set_rec(self.root, self.level, x, y, alive);
+    let root = self.set_rec(self.root, x, y, alive);
     self.root = root;
   }
 
@@ -141,7 +145,6 @@ impl Universe {
   fn set_rec(
     &mut self,
     node: NodeId,
-    level: u16,
     x: i64,
     y: i64,
     alive: bool
@@ -172,20 +175,20 @@ impl Universe {
 
         self.find_node(NodeKey::Leaf(new_key))
       }
-      Node::Internal(InternalNode { key, .. }) => {
+      Node::Internal(InternalNode { key, level, .. }) => {
         let r = 1i64 << level - 2;
         let mut new_key = key.clone();
         if y < 0 {
           if x < 0 {
-            new_key.nw = self.set_rec(key.nw, level - 1, x + r, y + r, alive);
+            new_key.nw = self.set_rec(key.nw, x + r, y + r, alive);
           } else {
-            new_key.ne = self.set_rec(key.ne, level - 1, x - r, y + r, alive);
+            new_key.ne = self.set_rec(key.ne, x - r, y + r, alive);
           }
         } else {
           if x < 0 {
-            new_key.sw = self.set_rec(key.sw, level - 1, x + r, y - r, alive);
+            new_key.sw = self.set_rec(key.sw, x + r, y - r, alive);
           } else {
-            new_key.se = self.set_rec(key.se, level - 1, x - r, y - r, alive);
+            new_key.se = self.set_rec(key.se, x - r, y - r, alive);
           }
         }
 
@@ -218,8 +221,7 @@ impl Universe {
           ..Default::default()
         }));
       }
-      Node::Internal(InternalNode { key, .. }) => {
-        let level = self.level;
+      Node::Internal(InternalNode { key, level, .. }) => {
         let empty = self.find_empty_node(level - 1);
         nw = self.find_node(NodeKey::Internal(InternalNodeKey {
           nw: empty,
@@ -248,21 +250,21 @@ impl Universe {
       }
     }
     self.root = self.find_node(NodeKey::new_internal(nw, ne, sw, se));
-    self.level += 1;
   }
 
   fn shrink(&mut self) {
-    if self.empty_nodes.len() <= (self.level - 2) as usize {
+    let mut level = node_ref(self.root).level();
+    if self.empty_nodes.len() <= (level - 2) as usize {
       return;
     }
 
-    while self.level > 4 {
+    while level > 4 {
       let root = node_ref(self.root).unwrap_internal_ref();
       let nw = node_ref(root.key.nw).unwrap_internal_ref();
       let ne = node_ref(root.key.ne).unwrap_internal_ref();
       let sw = node_ref(root.key.sw).unwrap_internal_ref();
       let se = node_ref(root.key.se).unwrap_internal_ref();
-      let empty = self.empty_nodes[(self.level - 2) as usize];
+      let empty = self.empty_nodes[(level - 2) as usize];
 
       if nw.key.nw == empty && nw.key.ne == empty && nw.key.sw == empty &&
         ne.key.nw == empty && ne.key.ne == empty && ne.key.se == empty &&
@@ -271,22 +273,19 @@ impl Universe {
       {
         self.root = self.find_node(NodeKey::new_internal(
           nw.key.se, ne.key.sw, sw.key.ne, se.key.nw));
-        self.level -= 1;
+        level -= 1;
       } else {
         break;
       }
     }
   }
 
-  fn clear_results(&self, node: NodeId, level: u16, k: u16) {
-    if level >= 4 && k < level - 2 {
-      let node = node_ref(node).unwrap_internal_ref();
-      node.result.set(INVALID_NODE_ID);
-      if level > 4 {
-        self.clear_results(node.key.nw, level - 1, k);
-        self.clear_results(node.key.ne, level - 1, k);
-        self.clear_results(node.key.sw, level - 1, k);
-        self.clear_results(node.key.se, level - 1, k);
+  /// `new_k` > `k`
+  fn clear_results(&self, k: u16, new_k: u16) {
+    for node in &self.set {
+      let level = node.level();
+      if level >= 4 && k < level - 2 && level - 2 <= new_k {
+        node.unwrap_internal_ref().result.set(INVALID_NODE_ID);
       }
     }
   }
@@ -314,18 +313,14 @@ impl Universe {
   }
 
   // Advance `2 ^ min(k, level - 2)` generations.
-  fn step(
-    &mut self,
-    node: NodeId,
-    level: u16,
-    k: u16
-  ) -> NodeId {
+  fn step(&mut self, node: NodeId, k: u16) -> NodeId {
     let node = node_ref(node).unwrap_internal_ref();
     let result = node.result.get();
     if result != INVALID_NODE_ID {
       return result;
     }
 
+    let level = node.level;
     if level == 4 {
       return self.leaf_step(node, k);
     }
@@ -335,30 +330,30 @@ impl Universe {
     let sw = node_ref(node.key.sw).unwrap_internal_ref();
     let se = node_ref(node.key.se).unwrap_internal_ref();
 
-    let n0 = self.step(node.key.nw, level - 1, k);
+    let n0 = self.step(node.key.nw, k);
     let nn = self.find_node(NodeKey::new_internal(
       nw.key.ne, ne.key.nw, nw.key.se, ne.key.sw
     ));
-    let n1 = self.step(nn, level - 1, k);
-    let n2 = self.step(node.key.ne, level - 1, k);
+    let n1 = self.step(nn, k);
+    let n2 = self.step(node.key.ne, k);
     let ww = self.find_node(NodeKey::new_internal(
       nw.key.sw, nw.key.se, sw.key.nw, sw.key.ne
     ));
-    let n3 = self.step(ww, level - 1, k);
+    let n3 = self.step(ww, k);
     let ee = self.find_node(NodeKey::new_internal(
       ne.key.sw, ne.key.se, se.key.nw, se.key.ne
     ));
     let cc = self.find_node(NodeKey::new_internal(
       nw.key.se, ne.key.sw, sw.key.ne, se.key.nw
     ));
-    let n4 = self.step(cc, level - 1, k);
-    let n5 = self.step(ee, level - 1, k);
-    let n6 = self.step(node.key.sw, level - 1, k);
+    let n4 = self.step(cc, k);
+    let n5 = self.step(ee, k);
+    let n6 = self.step(node.key.sw, k);
     let ss = self.find_node(NodeKey::new_internal(
       sw.key.ne, se.key.nw, sw.key.se, se.key.sw
     ));
-    let n7 = self.step(ss, level - 1, k);
-    let n8 = self.step(node.key.se, level - 1, k);
+    let n7 = self.step(ss, k);
+    let n8 = self.step(node.key.se, k);
 
     let nw;
     let ne;
@@ -369,32 +364,57 @@ impl Universe {
       let r1 = self.find_node(NodeKey::new_internal(n1, n2, n4, n5));
       let r2 = self.find_node(NodeKey::new_internal(n3, n4, n6, n7));
       let r3 = self.find_node(NodeKey::new_internal(n4, n5, n7, n8));
-      nw = self.step(r0, level - 1, k);
-      ne = self.step(r1, level - 1, k);
-      sw = self.step(r2, level - 1, k);
-      se = self.step(r3, level - 1, k);
+      nw = self.step(r0, k);
+      ne = self.step(r1, k);
+      sw = self.step(r2, k);
+      se = self.step(r3, k);
     } else {
-      let n0 = node_ref(n0).unwrap_internal_ref();
-      let n1 = node_ref(n1).unwrap_internal_ref();
-      let n2 = node_ref(n2).unwrap_internal_ref();
-      let n3 = node_ref(n3).unwrap_internal_ref();
-      let n4 = node_ref(n4).unwrap_internal_ref();
-      let n5 = node_ref(n5).unwrap_internal_ref();
-      let n6 = node_ref(n6).unwrap_internal_ref();
-      let n7 = node_ref(n7).unwrap_internal_ref();
-      let n8 = node_ref(n8).unwrap_internal_ref();
-      nw = self.find_node(NodeKey::new_internal(
-        n0.key.se, n1.key.sw, n3.key.ne, n4.key.sw
-      ));
-      ne = self.find_node(NodeKey::new_internal(
-        n1.key.se, n2.key.sw, n4.key.ne, n5.key.nw
-      ));
-      sw = self.find_node(NodeKey::new_internal(
-        n3.key.se, n4.key.sw, n6.key.ne, n7.key.nw
-      ));
-      se = self.find_node(NodeKey::new_internal(
-        n4.key.se, n5.key.sw, n7.key.ne, n8.key.nw
-      ));
+      match node_ref(n0) {
+        Node::Internal(n0) => {
+          let n1 = node_ref(n1).unwrap_internal_ref();
+          let n2 = node_ref(n2).unwrap_internal_ref();
+          let n3 = node_ref(n3).unwrap_internal_ref();
+          let n4 = node_ref(n4).unwrap_internal_ref();
+          let n5 = node_ref(n5).unwrap_internal_ref();
+          let n6 = node_ref(n6).unwrap_internal_ref();
+          let n7 = node_ref(n7).unwrap_internal_ref();
+          let n8 = node_ref(n8).unwrap_internal_ref();
+          nw = self.find_node(NodeKey::new_internal(
+            n0.key.se, n1.key.sw, n3.key.ne, n4.key.nw
+          ));
+          ne = self.find_node(NodeKey::new_internal(
+            n1.key.se, n2.key.sw, n4.key.ne, n5.key.nw
+          ));
+          sw = self.find_node(NodeKey::new_internal(
+            n3.key.se, n4.key.sw, n6.key.ne, n7.key.nw
+          ));
+          se = self.find_node(NodeKey::new_internal(
+            n4.key.se, n5.key.sw, n7.key.ne, n8.key.nw
+          ));
+        }
+        Node::Leaf(n0) => {
+          let n1 = node_ref(n1).unwrap_leaf_ref();
+          let n2 = node_ref(n2).unwrap_leaf_ref();
+          let n3 = node_ref(n3).unwrap_leaf_ref();
+          let n4 = node_ref(n4).unwrap_leaf_ref();
+          let n5 = node_ref(n5).unwrap_leaf_ref();
+          let n6 = node_ref(n6).unwrap_leaf_ref();
+          let n7 = node_ref(n7).unwrap_leaf_ref();
+          let n8 = node_ref(n8).unwrap_leaf_ref();
+          nw = self.find_node(NodeKey::new_leaf(
+            n0.key.se, n1.key.sw, n3.key.ne, n4.key.nw
+          ));
+          ne = self.find_node(NodeKey::new_leaf(
+            n1.key.se, n2.key.sw, n4.key.ne, n5.key.nw
+          ));
+          sw = self.find_node(NodeKey::new_leaf(
+            n3.key.se, n4.key.sw, n6.key.ne, n7.key.nw
+          ));
+          se = self.find_node(NodeKey::new_leaf(
+            n4.key.se, n5.key.sw, n7.key.ne, n8.key.nw
+          ));
+        }
+      }
     }
 
     let result = self.find_node(NodeKey::new_internal(nw, ne, sw, se));
@@ -411,7 +431,7 @@ impl Universe {
     let quad_result_ix = (k > 0) as usize;
     let n0 = nw.results[quad_result_ix];
     let n1 = node_ref(self.find_node(NodeKey::new_leaf(
-      nw.key.ne, ne.key.nw, nw.key.se, nw.key.sw)))
+      nw.key.ne, ne.key.nw, nw.key.se, ne.key.sw)))
       .unwrap_leaf_ref()
       .results[quad_result_ix];
     let n2 = ne.results[quad_result_ix];
@@ -429,7 +449,7 @@ impl Universe {
       .results[quad_result_ix];
     let n6 = sw.results[quad_result_ix];
     let n7 = node_ref(self.find_node(NodeKey::new_leaf(
-      sw.key.ne, se.key.nw, sw.key.se, sw.key.sw)))
+      sw.key.ne, se.key.nw, sw.key.se, se.key.sw)))
       .unwrap_leaf_ref()
       .results[quad_result_ix];
     let n8 = se.results[quad_result_ix];
@@ -463,12 +483,13 @@ impl Universe {
     result
   }
 
-  fn boundary(&self) -> Boundary {
-    self.boundary_rec(self.root, self.level, 0, 0)
+  pub(crate) fn boundary(&self) -> Boundary {
+    self.boundary_rec(self.root, 0, 0)
   }
 
   /// Returns (left, top, right, bottom), where right and bottom are exclusive.
-  fn boundary_rec(&self, node: NodeId, level: u16, ox: i64, oy: i64) -> Boundary {
+  fn boundary_rec(&self, node: NodeId, ox: i64, oy: i64) -> Boundary {
+    let level = node_ref(node).level();
     if self.empty_nodes.len() > level as usize &&
       node == self.empty_nodes[level as usize]
     {
@@ -495,10 +516,10 @@ impl Universe {
         }
         Node::Internal(InternalNode { key, .. }) => {
           let r = 1 << level - 2;
-          let nw_bound = self.boundary_rec(key.nw, level - 1, ox - r, oy - r);
-          let ne_bound = self.boundary_rec(key.ne, level - 1, ox + r, oy - r);
-          let sw_bound = self.boundary_rec(key.sw, level - 1, ox - r, oy + r);
-          let se_bound = self.boundary_rec(key.se, level - 1, ox + r, oy + r);
+          let nw_bound = self.boundary_rec(key.nw, ox - r, oy - r);
+          let ne_bound = self.boundary_rec(key.ne, ox + r, oy - r);
+          let sw_bound = self.boundary_rec(key.sw, ox - r, oy + r);
+          let se_bound = self.boundary_rec(key.se, ox + r, oy + r);
           let left = nw_bound.0.min(ne_bound.0).min(sw_bound.0).min(se_bound.0);
           let right = nw_bound.2.max(ne_bound.2).max(sw_bound.2).max(se_bound.2);
           let top = nw_bound.1.min(ne_bound.1).min(sw_bound.1).min(se_bound.1);
@@ -509,62 +530,42 @@ impl Universe {
     }
   }
 
-  /*
-  pub fn write_cells<F>(
-    &self,
-    Node(n): Node,
-    center_x: i64,
-    center_y: i64,
-    boundary: Boundary,
-    f: &mut F,
-  )
+  pub(crate) fn write_cells<F>(&self, mut f: F)
   where
-    F: FnMut(i64, i64)
+    F: FnMut(u16, u16, u16, u16, i64, i64)
   {
-    if n & INLINE_NODE_MASK != 0 {
-      if n & EMPTY_NODE_MASK == 0 {
-        let bits = (n >> INLINE_NODE_BIT_SHIFT) as u16;
-        if bits & 1 != 0 {
-          f(center_x - 1, center_y - 1)
-        }
-        if bits & 2 != 0 {
-          f(center_x, center_y - 1)
-        }
-        if bits & 4 != 0 {
-          f(center_x - 1, center_y)
-        }
-        if bits & 8 != 0 {
-          f(center_x, center_y)
-        }
-      }
-    } else {
-      let n = node_value_ref(n);
-      let key = &n.key;
-      let level = n.level;
-      let radius = 1 << (level - 1);
-      if center_x + radius <= boundary.0 ||
-        center_x - radius >= boundary.2 ||
-        center_y + radius <= boundary.1 ||
-        center_y - radius >= boundary.3
-      {
-        return;
-      }
+    self.write_cells_rec(self.root, 0, 0, &mut f);
+  }
 
-      let sub_radius = 1 << (level - 2);
-      self.write_cells(key.nw,
-        center_x - sub_radius, center_y - sub_radius, boundary, f);
-      self.write_cells(key.ne,
-        center_x + sub_radius, center_y - sub_radius, boundary, f);
-      self.write_cells(key.sw,
-        center_x - sub_radius, center_y + sub_radius, boundary, f);
-      self.write_cells(key.se,
-        center_x + sub_radius, center_y + sub_radius, boundary, f);
+  fn write_cells_rec<F>(&self, node: NodeId, ox: i64, oy: i64, f: &mut F)
+  where
+    F: FnMut(u16, u16, u16, u16, i64, i64)
+  {
+    let level = node_ref(node).level();
+    if self.empty_nodes.len() > level as usize &&
+      node == self.empty_nodes[level as usize]
+    {
+      return;
+    }
+
+    match node_ref(node) {
+      Node::Leaf(node) => {
+        let left = ox - 4;
+        let top = oy - 4;
+        f(node.key.nw, node.key.ne, node.key.sw, node.key.se, left, top);
+      }
+      Node::Internal(node) => {
+        let r = 1 << level - 2;
+        self.write_cells_rec(node.key.nw, ox - r, oy - r, f);
+        self.write_cells_rec(node.key.ne, ox + r, oy - r, f);
+        self.write_cells_rec(node.key.sw, ox - r, oy + r, f);
+        self.write_cells_rec(node.key.se, ox + r, oy + r, f);
+      }
     }
   }
-  */
 
   #[cfg(test)]
-  fn debug(&self, node: NodeId, level: u16) -> Vec<u128> {
+  pub(crate) fn debug(&self, node: NodeId) -> Vec<u128> {
     use itertools::Itertools;
 
     match node_ref(node) {
@@ -580,12 +581,12 @@ impl Universe {
           (key.sw << 4 & 0xf0 | key.se >>  0 & 0xf) as u128,
         ]
       }
-      Node::Internal(InternalNode { key, .. }) => {
+      Node::Internal(InternalNode { key, level, .. }) => {
         let r = 1 << level - 1;
-        let nw = self.debug(key.nw, level - 1);
-        let ne = self.debug(key.ne, level - 1);
-        let sw = self.debug(key.sw, level - 1);
-        let se = self.debug(key.se, level - 1);
+        let nw = self.debug(key.nw);
+        let ne = self.debug(key.ne);
+        let sw = self.debug(key.sw);
+        let se = self.debug(key.se);
         nw.into_iter().zip(ne)
           .chain(sw.into_iter().zip(se))
           .map(|(x, y)| x << r | y)
@@ -593,10 +594,6 @@ impl Universe {
       }
     }
   }
-}
-
-fn node_ref(NodeId(n): NodeId) -> &'static Node {
-  unsafe { std::mem::transmute(n) }
 }
 
 type Boundary = (i64, i64, i64, i64);
@@ -621,14 +618,13 @@ const fn compute_byte_range() -> [(i64, i64); 256] {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use pretty_assertions::assert_eq;
 
   #[test]
   fn test_debug_level3() {
     let mut uni = Universe::new(GAME_OF_LIFE);
     uni.set(-1, -1, true);
     uni.set(0, 0, true);
-    assert_eq!(uni.debug(uni.root, uni.level),
+    assert_eq!(uni.debug(uni.root),
       vec![
         0b_0000_0000,
         0b_0000_0000,
@@ -653,7 +649,7 @@ mod tests {
     uni.set(3, 1, true);
     uni.set(6, 3, true);
     uni.set(4, 6, true);
-    assert_eq!(uni.debug(uni.root, uni.level),
+    assert_eq!(uni.debug(uni.root),
       vec![
         0b_0000_0000_0000_0000,
         0b_0100_0000_0000_0000,
@@ -762,8 +758,8 @@ mod tests {
     uni.set(-1, 0, true);
     uni.set(-1, 1, true);
     uni.expand();
-    let node = uni.step(uni.root, 4, 0);
-    assert_eq!(uni.debug(node, 3),
+    let node = uni.step(uni.root, 0);
+    assert_eq!(uni.debug(node),
       vec![
         0b_0000_0000,
         0b_0000_0000,
@@ -785,8 +781,8 @@ mod tests {
     uni.set(-1, 0, true);
     uni.set(-1, 1, true);
     uni.expand();
-    let node = uni.step(uni.root, 4, 1);
-    assert_eq!(uni.debug(node, 3),
+    let node = uni.step(uni.root, 1);
+    assert_eq!(uni.debug(node),
       vec![
         0b_0000_0000,
         0b_0000_0000,
@@ -808,8 +804,8 @@ mod tests {
     uni.set(-1, 0, true);
     uni.set(-1, 1, true);
     uni.expand();
-    let node = uni.step(uni.root, 4, 2);
-    assert_eq!(uni.debug(node, 3),
+    let node = uni.step(uni.root, 2);
+    assert_eq!(uni.debug(node),
       vec![
         0b_0000_0000,
         0b_0000_0000,
@@ -822,59 +818,158 @@ mod tests {
       ]);
   }
 
+  #[test]
+  fn test_level5_result4() {
+    let mut uni = Universe::new(GAME_OF_LIFE);
+    uni.set(0, 0, true);
+    uni.set(0, -1, true);
+    uni.set(-1, -1, true);
+    uni.set(-2, -1, true);
+    uni.set(-1, -2, true);
+    uni.set(-2, -2, true);
+    uni.set(-3, 0, true);
+    uni.set(-2, 1, true);
+    uni.set(-1, 1, true);
+    uni.expand();
+    uni.expand();
+    uni.root = uni.step(uni.root, 2);
+    uni.shrink();
+    assert_eq!(uni.debug(uni.root),
+      vec![
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0001_0000_0000,
+        0b_0000_0110_1100_0000,
+        0b_0000_0100_0000_0000,
+        0b_0000_0100_0100_0000,
+        0b_0000_0011_1000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+        0b_0000_0000_0000_0000,
+      ]);
+  }
+
+  #[test]
+  fn test_simulation_2_gen() {
+    let mut uni = Universe::new(GAME_OF_LIFE);
+    uni.set(-1, -1, true);
+    uni.set(0, -1, true);
+    uni.set(-2, 0, true);
+    uni.set(-1, 0, true);
+    uni.set(-1, 1, true);
+    uni.simulate(2);
+    assert_eq!(uni.debug(uni.root), vec![
+      0b_0000_0000,
+      0b_0000_0000,
+      0b_0001_0000,
+      0b_0011_0000,
+      0b_0100_1000,
+      0b_0011_0000,
+      0b_0000_0000,
+      0b_0000_0000,
+    ]);
+  }
+
+  #[test]
+  fn test_simulation_7_gen() {
+    let mut uni = Universe::new(GAME_OF_LIFE);
+    uni.set(0, 0, true);
+    uni.set(1, 0, true);
+    uni.set(1, 1, true);
+    uni.set(1, 2, true);
+    uni.set(-1, 0, true);
+    uni.set(-1, 1, true);
+    uni.set(-1, 2, true);
+    uni.simulate(7);
+    assert_eq!(uni.debug(uni.root), vec![
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_1000_0000,
+      0b_0000_0001_1100_0000,
+      0b_0000_0011_0110_0000,
+      0b_0000_0110_0011_0000,
+      0b_0000_0011_0110_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+    ]);
+  }
+
+  #[test]
+  fn test_simulation_8_gen() {
+    let mut uni = Universe::new(GAME_OF_LIFE);
+    uni.set(0, 0, true);
+    uni.set(1, 0, true);
+    uni.set(1, 1, true);
+    uni.set(1, 2, true);
+    uni.set(-1, 0, true);
+    uni.set(-1, 1, true);
+    uni.set(-1, 2, true);
+    uni.simulate(8);
+    assert_eq!(uni.debug(uni.root), vec![
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0001_1100_0000,
+      0b_0000_0010_0010_0000,
+      0b_0000_0100_0001_0000,
+      0b_0000_0100_0001_0000,
+      0b_0000_0111_0111_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+    ]);
+  }
+
+  #[test]
+  fn test_simulation_16_gen() {
+    let mut uni = Universe::new(GAME_OF_LIFE);
+    uni.set(0, 0, true);
+    uni.set(1, 0, true);
+    uni.set(1, 1, true);
+    uni.set(1, 2, true);
+    uni.set(-1, 0, true);
+    uni.set(-1, 1, true);
+    uni.set(-1, 2, true);
+    uni.simulate(16);
+    assert_eq!(uni.debug(uni.root), vec![
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0001_1100_0000,
+      0b_0000_0000_1000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0011_1000_0000_1110,
+      0b_0101_0001_1100_0101,
+      0b_0100_0000_0000_0001,
+      0b_0110_1100_0001_1011,
+      0b_0001_0001_0100_0100,
+      0b_0001_1100_0001_1100,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+    ]);
+  }
+
   /*
-  #[test]
-  fn test_simulation_2_steps() {
-    let mut uni = Universe::new();
-    let node = uni.new_empty_node(2);
-    let node = uni.set(node, -1, -1);
-    let node = uni.set(node, 0, -1);
-    let node = uni.set(node, -2, 0);
-    let node = uni.set(node, -1, 0);
-    let node = uni.set(node, -1, 1);
-    let node = uni.simulate(node, 2);
-    assert_eq!(&uni.debug(node), r"
-        
-        
-   #    
-  ##    
- #  #   
-  ##    
-        
-        ".trim_start_matches('\n'));
-
-  }
-
-  #[test]
-  fn test_simulation_7_steps() {
-    let mut uni = Universe::new();
-    let node = uni.new_empty_node(2);
-    let node = uni.set(node, -1, -1);
-    let node = uni.set(node, 0, -1);
-    let node = uni.set(node, -2, 0);
-    let node = uni.set(node, -1, 0);
-    let node = uni.set(node, -1, 1);
-    let node = uni.simulate(node, 7);
-    assert_eq!(&uni.debug(node), r"
-                
-                
-                
-                
-                
-       #        
-     ## ##      
-     #          
-     #   #      
-      ###       
-                
-                
-                
-                
-                
-                ".trim_start_matches('\n'));
-
-  }
-
   #[test]
   fn test_gc() {
     use std::fs;
