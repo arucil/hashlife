@@ -14,6 +14,7 @@ pub struct Universe {
   ///     -     NW NE  -  - SW SE
   /// ```
   level2_results: [u8; 65536],
+  pub(crate) rule: Rule,
 }
 
 impl Universe {
@@ -24,6 +25,7 @@ impl Universe {
       root: INVALID_NODE_ID,
       empty_nodes: vec![INVALID_NODE_ID; 4],
       level2_results,
+      rule,
     };
 
     let root = uni.find_node(NodeKey::new_leaf(0, 0, 0, 0));
@@ -41,6 +43,10 @@ impl Universe {
     let mut k = num_gen.trailing_zeros() as u16;
 
     loop {
+      // preserve enough empty space
+      self.expand();
+      self.expand();
+
       // we need to advance `2 ^ min(k, level - 3)` generations, instead of
       // `2 ^ min(k, level - 2)` generations, because the latter can cause the
       // leakage of information of the RESULT macro-cell.
@@ -340,13 +346,13 @@ impl Universe {
       nw.key.sw, nw.key.se, sw.key.nw, sw.key.ne
     ));
     let n3 = self.step(ww, k);
-    let ee = self.find_node(NodeKey::new_internal(
-      ne.key.sw, ne.key.se, se.key.nw, se.key.ne
-    ));
     let cc = self.find_node(NodeKey::new_internal(
       nw.key.se, ne.key.sw, sw.key.ne, se.key.nw
     ));
     let n4 = self.step(cc, k);
+    let ee = self.find_node(NodeKey::new_internal(
+      ne.key.sw, ne.key.se, se.key.nw, se.key.ne
+    ));
     let n5 = self.step(ee, k);
     let n6 = self.step(node.key.sw, k);
     let ss = self.find_node(NodeKey::new_internal(
@@ -865,14 +871,22 @@ mod tests {
     uni.set(-1, 1, true);
     uni.simulate(2);
     assert_eq!(uni.debug(uni.root), vec![
-      0b_0000_0000,
-      0b_0000_0000,
-      0b_0001_0000,
-      0b_0011_0000,
-      0b_0100_1000,
-      0b_0011_0000,
-      0b_0000_0000,
-      0b_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0001_0000_0000,
+      0b_0000_0011_0000_0000,
+      0b_0000_0100_1000_0000,
+      0b_0000_0011_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
+      0b_0000_0000_0000_0000,
     ]);
   }
 

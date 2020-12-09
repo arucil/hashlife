@@ -1,4 +1,3 @@
-use regex::Regex;
 use crate::rule::*;
 use crate::universe::*;
 
@@ -29,7 +28,7 @@ pub fn read(
         height = Some(kv[1].parse().expect("invalid y"));
       }
       "rule" => {
-        rule = Some(parse_rule(&kv[1]));
+        rule = Some(parse_rule(&kv[1]).expect("invalid header line"));
       }
       _ => {}
     }
@@ -89,34 +88,34 @@ pub fn read(
   uni
 }
 
-fn parse_rule(s: &str) -> Rule {
-  let rule_re = Regex::new(r"(?i)^B(\d+)/S(\d+)$").unwrap();
-  if let Some(caps) = rule_re.captures(s) {
-    let mut rule = Rule::new();
-    let birth = caps.get(1).unwrap().as_str()
-      .chars()
-      .map(|c| c.to_digit(10).unwrap());
-    for b in birth {
-      if b > 8 {
-        panic!("invalid rule");
-      }
-      rule.set_birth(b as u8);
-    }
-
-    let survival = caps.get(2).unwrap().as_str()
-      .chars()
-      .map(|c| c.to_digit(10).unwrap());
-    for s in survival {
-      if s > 8 {
-        panic!("invalid rule");
-      }
-      rule.set_survival(s as u8);
-    }
-
-    rule
-  } else {
-    panic!("invalid rule");
+fn parse_rule(s: &str) -> Option<Rule> {
+  let r = s.split("/").collect::<Vec<_>>();
+  if r.len() != 2 {
+    return None;
   }
+  if r[0].as_bytes()[0].to_ascii_lowercase() != b'b' ||
+    r[1].as_bytes()[0].to_ascii_lowercase() != b's'
+  {
+    return None;
+  }
+
+  let mut rule = Rule::new();
+  for c in r[0].chars().skip(1) {
+    let b = c.to_digit(10)?;
+    if b > 8 {
+      return None;
+    }
+    rule.set_birth(b as u8);
+  }
+  for c in r[1].chars().skip(1) {
+    let b = c.to_digit(10)?;
+    if b > 8 {
+      return None;
+    }
+    rule.set_survival(b as u8);
+  }
+
+  Some(rule)
 }
 
 /// Write a Life pattern to a RLE string.
@@ -127,7 +126,8 @@ pub fn write(
 ) -> String {
   let (left, top, right, bottom) = univ.boundary();
   let width = (right - left) as u32;
-  let mut output = format!("x = {}, y = {}, rule = B3/S23\n", width, bottom - top);
+  let mut output = format!("x = {}, y = {}, rule = {}\n",
+    width, bottom - top, univ.rule);
   let data = crate::export::write_buffer(univ);
 
   let mut num_consec_next_rows = 0;
@@ -139,11 +139,11 @@ pub fn write(
       let mut left_bits = 8;
       while left_bits != 0 && row_left_bits != 0 {
         let num_new_unit;
-        let new_unit = if x & 1 == 0 {
-          num_new_unit = x.trailing_zeros().min(left_bits).min(row_left_bits);
+        let new_unit = if x & 128 == 0 {
+          num_new_unit = x.leading_zeros().min(left_bits).min(row_left_bits);
           RleUnit::Dead
         } else {
-          num_new_unit = x.trailing_ones();
+          num_new_unit = x.leading_ones();
           RleUnit::Alive
         };
         left_bits -= num_new_unit;
@@ -151,7 +151,7 @@ pub fn write(
         if num_new_unit == 8 {
           x = 0;
         } else {
-          x >>= num_new_unit;
+          x <<= num_new_unit;
         }
 
         if Some(new_unit) != unit {

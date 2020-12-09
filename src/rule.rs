@@ -1,3 +1,4 @@
+use std::fmt::{self, Display};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rule {
@@ -44,5 +45,23 @@ impl Rule {
   pub(crate) fn set_survival(&mut self, num: u8) {
     assert!(num < 9);
     self.survival |= 1 << num;
+  }
+}
+
+impl Display for Rule {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "B")?;
+    let mut b = self.birth;
+    while b != 0 {
+      write!(f, "{}", b.trailing_zeros())?;
+      b &= b - 1;
+    }
+    write!(f, "/S")?;
+    let mut s = self.survival;
+    while s != 0 {
+      write!(f, "{}", s.trailing_zeros())?;
+      s &= s - 1;
+    }
+    Ok(())
   }
 }
