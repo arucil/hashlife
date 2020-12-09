@@ -11,7 +11,7 @@ pub struct Universe {
   /// result is a 2x2 square, whose cells are arranged as follows
   /// ```ignored
   /// bit 7 ...  5  4  3  2  1  0
-  ///     -     NW NE  -  - SW SE
+  ///     -  -  NW NE  -  - SW SE
   /// ```
   level2_results: [u8; 65536],
   rule: Rule,
@@ -1090,20 +1090,4 @@ mod tests {
       0b_0000_0000_0000_0000,
     ]);
   }
-
-  /*
-  #[test]
-  fn test_gc() {
-    use std::fs;
-    use crate::rle;
-
-    let mut uni = Universe::new();
-    let src = fs::read_to_string("tests/fixtures/Breeder.lif").unwrap();
-    let node = rle::read(src, &mut uni);
-
-
-    let _node = uni.simulate(node, 1);
-
-  }
-  */
 }
