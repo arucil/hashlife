@@ -16,7 +16,7 @@ pub(crate) struct LeafNode {
   pub(crate) key: LeafNodeKey,
   /// Results after one generation and two generations.
   pub(crate) results: [u16; 2],
-  pub(crate) mark: bool,
+  pub(crate) mark: Cell<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub(crate) struct InternalNode {
   pub(crate) result: Cell<NodeId>,
   /// `2 ^ level` cells on both sides of a root square.
   pub(crate) level: u16,
-  pub(crate) mark: bool,
+  pub(crate) mark: Cell<bool>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -132,7 +132,7 @@ impl Node {
     Node::Leaf(LeafNode {
       key,
       results,
-      mark: false,
+      mark: Cell::new(false),
     })
   }
 
@@ -142,7 +142,7 @@ impl Node {
       key,
       result: Cell::new(INVALID_NODE_ID),
       level,
-      mark: false,
+      mark: Cell::new(false),
     })
   }
 
@@ -164,6 +164,13 @@ impl Node {
     match self {
       Node::Internal(node) => node.level,
       Node::Leaf(_) => 3,
+    }
+  }
+
+  pub(crate) fn mark(&self) -> &Cell<bool> {
+    match self {
+      Node::Leaf(node) => &node.mark,
+      Node::Internal(node) => &node.mark,
     }
   }
 }

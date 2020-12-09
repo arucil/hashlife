@@ -42,7 +42,7 @@ pub(crate) fn write_buffer(uni: &Universe) -> Vec<Vec<u8>> {
     panic!("empty");
   }
 
-  let level = crate::node::node_ref(uni.root).level();
+  let level = uni.level();
   let w = right - left;
   let h = (bottom - top) as usize;
   let bw = w + 7 >> 3;

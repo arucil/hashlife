@@ -127,7 +127,7 @@ pub fn write(
   let (left, top, right, bottom) = univ.boundary();
   let width = (right - left) as u32;
   let mut output = format!("x = {}, y = {}, rule = {}\n",
-    width, bottom - top, univ.rule);
+    width, bottom - top, univ.rule());
   let data = crate::export::write_buffer(univ);
 
   let mut num_consec_next_rows = 0;
@@ -236,7 +236,7 @@ bo$2bo$3o!
 ".trim();
 
     let uni = read(src.to_owned());
-    assert_eq!(uni.debug(uni.root), vec![
+    assert_eq!(uni.debug_root(), vec![
       0b_0000_0000,
       0b_0000_0000,
       0b_0000_0000,

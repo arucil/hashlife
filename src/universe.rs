@@ -6,7 +6,7 @@ use crate::rule::*;
 
 pub struct Universe {
   set: IndexSet<Box<Node>, BuildHasherDefault<FxHasher>>,
-  pub(crate) root: NodeId,
+  root: NodeId,
   empty_nodes: Vec<NodeId>,
   /// result is a 2x2 square, whose cells are arranged as follows
   /// ```ignored
@@ -14,8 +14,14 @@ pub struct Universe {
   ///     -     NW NE  -  - SW SE
   /// ```
   level2_results: [u8; 65536],
-  pub(crate) rule: Rule,
+  rule: Rule,
+  gc_roots: Vec<NodeId>,
+  gc_threshold: usize,
 }
+
+const INITIAL_GC_THRESHOLD: usize = 30000;
+/// percentage
+const GC_THRESHOLD_INCREMENT: usize = 160;
 
 impl Universe {
   pub fn new(rule: Rule) -> Self {
@@ -26,16 +32,29 @@ impl Universe {
       empty_nodes: vec![INVALID_NODE_ID; 4],
       level2_results,
       rule,
+      gc_roots: vec![],
+      gc_threshold: INITIAL_GC_THRESHOLD,
     };
 
     let root = uni.find_node(NodeKey::new_leaf(0, 0, 0, 0));
     uni.root = root;
     uni.empty_nodes[3] = root;
+    uni.gc_roots.clear();
     uni
+  }
+
+  pub(crate) fn level(&self) -> u16 {
+    node_ref(self.root).level()
+  }
+
+  pub(crate) fn rule(&self) -> &Rule {
+    &self.rule
   }
 
   /// `num_gen` is number of generations.
   pub fn simulate(&mut self, mut num_gen: usize) {
+    self.gc();
+
     if num_gen == 0 {
       return;
     }
@@ -63,6 +82,10 @@ impl Universe {
         break;
       }
 
+      if self.set.len() >= self.gc_threshold {
+        self.gc();
+      }
+
       let old_k = k;
       k = num_gen.trailing_zeros() as u16;
       self.clear_results(old_k, k);
@@ -85,8 +108,8 @@ impl Universe {
           }
         };
         let id = NodeId(&*node as *const Node as u64);
-        let new = self.set.insert(node);
-        debug_assert!(new);
+        self.gc_root(id);
+        self.set.insert(node);
         id
       }
     }
@@ -182,6 +205,7 @@ impl Universe {
         self.find_node(NodeKey::Leaf(new_key))
       }
       Node::Internal(InternalNode { key, level, .. }) => {
+        let gc_s = self.gc_save();
         let r = 1i64 << level - 2;
         let mut new_key = key.clone();
         if y < 0 {
@@ -198,12 +222,16 @@ impl Universe {
           }
         }
 
-        self.find_node(NodeKey::Internal(new_key))
+        let new_node = self.find_node(NodeKey::Internal(new_key));
+        self.gc_restore(gc_s);
+        self.gc_root(new_node);
+        new_node
       }
     }
   }
 
   fn expand(&mut self) {
+    let gc_s = self.gc_save();
     let nw;
     let ne;
     let sw;
@@ -256,6 +284,7 @@ impl Universe {
       }
     }
     self.root = self.find_node(NodeKey::new_internal(nw, ne, sw, se));
+    self.gc_restore(gc_s);
   }
 
   fn shrink(&mut self) {
@@ -264,6 +293,7 @@ impl Universe {
       return;
     }
 
+    let gc_s = self.gc_save();
     while level > 4 {
       let root = node_ref(self.root).unwrap_internal_ref();
       let nw = node_ref(root.key.nw).unwrap_internal_ref();
@@ -280,6 +310,7 @@ impl Universe {
         self.root = self.find_node(NodeKey::new_internal(
           nw.key.se, ne.key.sw, sw.key.ne, se.key.nw));
         level -= 1;
+        self.gc_restore(gc_s);
       } else {
         break;
       }
@@ -299,6 +330,7 @@ impl Universe {
   fn find_empty_node(&mut self, level: u16) -> NodeId {
     let len = self.empty_nodes.len() ;
     if len < level as usize + 1 {
+      let gc_s = self.gc_save();
       for i in len..=level as usize {
         let prev = self.empty_nodes[i - 1];
         let node = self.find_node(NodeKey::new_internal(prev, prev, prev, prev));
@@ -310,12 +342,9 @@ impl Universe {
         }
         self.empty_nodes.push(node);
       }
+      self.gc_restore(gc_s);
     }
     self.empty_nodes[level as usize]
-  }
-
-  pub fn mem(&self) -> usize {
-    self.set.len()
   }
 
   // Advance `2 ^ min(k, level - 2)` generations.
@@ -335,6 +364,8 @@ impl Universe {
     let ne = node_ref(node.key.ne).unwrap_internal_ref();
     let sw = node_ref(node.key.sw).unwrap_internal_ref();
     let se = node_ref(node.key.se).unwrap_internal_ref();
+
+    let gc_s = self.gc_save();
 
     let n0 = self.step(node.key.nw, k);
     let nn = self.find_node(NodeKey::new_internal(
@@ -423,7 +454,15 @@ impl Universe {
       }
     }
 
+    self.gc_restore(gc_s);
+    self.gc_root(nw);
+    self.gc_root(ne);
+    self.gc_root(sw);
+    self.gc_root(se);
+
     let result = self.find_node(NodeKey::new_internal(nw, ne, sw, se));
+    self.gc_restore(gc_s);
+    self.gc_root(result);
     node.result.set(result);
     result
   }
@@ -487,6 +526,70 @@ impl Universe {
     let result = self.find_node(NodeKey::new_leaf(nw, ne, sw, se));
     node.result.set(result);
     result
+  }
+
+  fn gc_root(&mut self, node: NodeId) {
+    self.gc_roots.push(node);
+  }
+
+  fn gc_save(&mut self) -> usize {
+    self.gc_roots.len()
+  }
+
+  fn gc_restore(&mut self, s: usize) {
+    self.gc_roots.truncate(s);
+  }
+
+  fn gc(&mut self) {
+    self.gc_mark();
+    self.gc_sweep();
+    self.gc_threshold = self.set.len() * GC_THRESHOLD_INCREMENT / 100 + 1;
+  }
+
+  fn gc_mark(&mut self) {
+    let gc_s = self.gc_save();
+    self.gc_roots.push(self.root);
+    self.gc_roots.push(*self.empty_nodes.last().unwrap());
+
+    let mut i = 0;
+    while i < self.gc_roots.len() {
+      let node = node_ref(self.gc_roots[i]);
+      if node.mark().get() {
+        i += 1;
+        continue;
+      }
+
+      match node {
+        Node::Internal(node) => {
+          node.mark.set(true);
+          self.gc_roots.push(node.key.nw);
+          self.gc_roots.push(node.key.ne);
+          self.gc_roots.push(node.key.sw);
+          self.gc_roots.push(node.key.se);
+          if node.result.get() != INVALID_NODE_ID {
+            self.gc_roots.push(node.result.get());
+          }
+        }
+        Node::Leaf(node) => {
+          node.mark.set(true);
+        }
+      }
+    }
+
+    self.gc_restore(gc_s);
+  }
+
+  fn gc_sweep(&mut self) {
+    let mut i = 0;
+    while i < self.set.len() {
+      let node = &self.set[i];
+      if node.mark().get() {
+        node.mark().set(false);
+        i += 1;
+      } else {
+        self.set.swap_remove_index(i);
+      }
+    }
   }
 
   pub(crate) fn boundary(&self) -> Boundary {
@@ -568,6 +671,11 @@ impl Universe {
         self.write_cells_rec(node.key.se, ox + r, oy + r, f);
       }
     }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn debug_root(&self) -> Vec<u128> {
+    self.debug(self.root)
   }
 
   #[cfg(test)]
