@@ -1,5 +1,5 @@
-use hashlife::rle;
-use hashlife::export;
+use algo::rle;
+use algo::export;
 use std::fs;
 
 fn main() {

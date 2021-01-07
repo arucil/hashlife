@@ -1,5 +1,5 @@
 use std::fs;
-use hashlife::rle;
+use algo::rle;
 
 #[test]
 fn gen10000() {
