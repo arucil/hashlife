@@ -30,11 +30,11 @@ pub(crate) fn compute_level2_results(rule: Rule) -> [u8; 65536] {
 }
 
 impl Rule {
-  pub(crate) fn new() -> Self {
+  pub fn new() -> Self {
     Self::default()
   }
 
-  pub(crate) fn set_birth(&mut self, num: u8) {
+  pub fn set_birth(&mut self, num: u8) {
     assert!(num < 9);
     if num == 0 {
       panic!("B0 is not allowed for HashLife");
@@ -42,7 +42,7 @@ impl Rule {
     self.birth |= 1 << num;
   }
 
-  pub(crate) fn set_survival(&mut self, num: u8) {
+  pub fn set_survival(&mut self, num: u8) {
     assert!(num < 9);
     self.survival |= 1 << num;
   }

@@ -1,5 +1,4 @@
 use algo::rle;
-use algo::export;
 use std::fs;
 
 fn main() {
@@ -11,5 +10,5 @@ fn main() {
 
     //let rle = rle::write(&uni);
     //fs::write("f1.rle", rle).unwrap();
-    export::save_image(&uni, "f1.bmp");
+    image::save_image(&uni, "f1.bmp");
 }

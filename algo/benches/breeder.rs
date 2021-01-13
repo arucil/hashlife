@@ -1,11 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use hashlife::rle;
 use std::fs;
 
 fn breeder_benchmark(c: &mut Criterion) {
   c.bench_function("breeder 100000 generations", |b| b.iter(|| {
     let src = fs::read_to_string("tests/fixtures/Breeder.lif").unwrap();
-    let mut uni = rle::read(src);
+    let mut uni = algo::rle::read(src);
 
     uni.simulate(black_box(100000));
   }));

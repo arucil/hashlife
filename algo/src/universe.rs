@@ -47,7 +47,7 @@ impl Universe {
     node_ref(self.root).level()
   }
 
-  pub(crate) fn rule(&self) -> &Rule {
+  pub fn rule(&self) -> &Rule {
     &self.rule
   }
 
@@ -592,7 +592,7 @@ impl Universe {
     }
   }
 
-  pub(crate) fn boundary(&self) -> Boundary {
+  pub fn boundary(&self) -> Boundary {
     self.boundary_rec(self.root, 0, 0)
   }
 
@@ -674,7 +674,7 @@ impl Universe {
   }
 
   #[cfg(test)]
-  pub(crate) fn debug_root(&self) -> Vec<u128> {
+  pub fn debug_root(&self) -> Vec<u128> {
     self.debug(self.root)
   }
 
@@ -710,7 +710,7 @@ impl Universe {
   }
 }
 
-type Boundary = (i64, i64, i64, i64);
+pub type Boundary = (i64, i64, i64, i64);
 
 const EMPTY_BOUNDARY: Boundary = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
 
@@ -738,7 +738,7 @@ mod tests {
     let mut uni = Universe::new(GAME_OF_LIFE);
     uni.set(-1, -1, true);
     uni.set(0, 0, true);
-    assert_eq!(uni.debug(uni.root),
+    assert_eq!(uni.debug_root(),
       vec![
         0b_0000_0000,
         0b_0000_0000,
@@ -763,7 +763,7 @@ mod tests {
     uni.set(3, 1, true);
     uni.set(6, 3, true);
     uni.set(4, 6, true);
-    assert_eq!(uni.debug(uni.root),
+    assert_eq!(uni.debug_root(),
       vec![
         0b_0000_0000_0000_0000,
         0b_0100_0000_0000_0000,
@@ -948,7 +948,7 @@ mod tests {
     uni.expand();
     uni.root = uni.step(uni.root, 2);
     uni.shrink();
-    assert_eq!(uni.debug(uni.root),
+    assert_eq!(uni.debug_root(),
       vec![
         0b_0000_0000_0000_0000,
         0b_0000_0000_0000_0000,
@@ -978,7 +978,7 @@ mod tests {
     uni.set(-1, 0, true);
     uni.set(-1, 1, true);
     uni.simulate(2);
-    assert_eq!(uni.debug(uni.root), vec![
+    assert_eq!(uni.debug_root(), vec![
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
@@ -1009,7 +1009,7 @@ mod tests {
     uni.set(-1, 1, true);
     uni.set(-1, 2, true);
     uni.simulate(7);
-    assert_eq!(uni.debug(uni.root), vec![
+    assert_eq!(uni.debug_root(), vec![
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
@@ -1040,7 +1040,7 @@ mod tests {
     uni.set(-1, 1, true);
     uni.set(-1, 2, true);
     uni.simulate(8);
-    assert_eq!(uni.debug(uni.root), vec![
+    assert_eq!(uni.debug_root(), vec![
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
@@ -1071,7 +1071,7 @@ mod tests {
     uni.set(-1, 1, true);
     uni.set(-1, 2, true);
     uni.simulate(16);
-    assert_eq!(uni.debug(uni.root), vec![
+    assert_eq!(uni.debug_root(), vec![
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
       0b_0000_0000_0000_0000,
