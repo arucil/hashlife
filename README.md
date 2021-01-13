@@ -1,6 +1,15 @@
 # hashlife
 
-Rust implementation of [HashLife](https://en.wikipedia.org/wiki/Hashlife).
+Rust implementation of [HashLife](https://en.wikipedia.org/wiki/Hashlife). This
+project includes an implementation of HashLife and a front-end.
+
+# Dependencies
+
+The front-end requires `wasm-pack`, run the following command to install it
+
+```shell
+cargo install wasm-pack
+```
 
 # References
 
