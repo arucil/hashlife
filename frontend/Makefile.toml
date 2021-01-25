@@ -1,0 +1,6 @@
+[tasks.build]
+command = "npm"
+args = ["run", "build"]
+dependencies = [
+  { name = "build", path = "../wasm-binding" }
+]

@@ -1,0 +1,4 @@
+[tasks.build]
+dependencies = [
+  { name = "build", path = "frontend" }
+]

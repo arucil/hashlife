@@ -1,0 +1,4 @@
+[tasks.build]
+install_crate = "wasm-pack"
+command = "wasm-pack"
+args = ["build"]
