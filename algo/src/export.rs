@@ -51,3 +51,21 @@ pub fn write_buffer(uni: &Universe) -> Vec<Vec<u8>> {
 
   buffer
 }
+
+pub struct CellData {
+  pub nw: u16,
+  pub ne: u16,
+  pub sw: u16,
+  pub se: u16,
+  pub x: i64,
+  pub y: i64,
+}
+
+pub fn write_cells(
+  univ: &Universe,
+  mut f: impl FnMut(CellData),
+) {
+  univ.write_cells(|nw, ne, sw, se, x, y| {
+    f(CellData { nw, ne, sw, se, x, y })
+  })
+}

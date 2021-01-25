@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>HashLife</title>
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+      }
+      #universe {
+        border: solid 1px lightgray;
+      }
+      .control-bar {
+        margin-bottom: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <style>#forkongithub a{background:#aaa;color:#fff;text-decoration:none;font-family:arial,sans-serif;text-align:center;font-weight:bold;padding:5px 40px;font-size:1rem;line-height:2rem;position:relative;transition:0.5s;}#forkongithub a:hover{background:hsl(20,90%,75%);color:#fff;}#forkongithub a::before,#forkongithub a::after{content:"";width:100%;display:block;position:absolute;top:1px;left:0;height:1px;background:#fff;}#forkongithub a::after{bottom:1px;top:auto;}@media screen and (min-width:800px){#forkongithub{position:absolute;display:block;top:0;right:0;width:200px;overflow:hidden;height:200px;z-index:9999;}#forkongithub a{width:200px;position:absolute;top:60px;right:-60px;transform:rotate(45deg);-webkit-transform:rotate(45deg);-ms-transform:rotate(45deg);-moz-transform:rotate(45deg);-o-transform:rotate(45deg);box-shadow:3px 3px 5px rgba(100,100,100,0.8);}}</style><span id="forkongithub"><a href="https://github.com/arucil/hashlife">Fork me on GitHub</a></span>
+
+    <div class="control-bar">
+      Pattern:
+      <select id="universe-template">
+        <option value="empty">Empty</option>
+        <option value="glider">Glider</option>
+        <option value="r">R-pentomino</option>
+        <option value="breeder">Breeder</option>
+      </select>
+    </div>
+    <canvas id="universe" width=600 height=480></canvas>
+    <script src="./bootstrap.js"></script>
+  </body>
+</html>
