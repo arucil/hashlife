@@ -1,6 +1,22 @@
+[tasks.setup]
+workspace = false
+script_runner = "@shell"
+script = '''
+npm install
+'''
+
 [tasks.build]
+clear = true
 command = "npm"
 args = ["run", "build"]
 dependencies = [
   { name = "build", path = "../wasm-binding" }
 ]
+
+[tasks.clean]
+clear = true
+script_runner = "@shell"
+script = '''
+rm -rf node_modules
+rm -rf dist
+'''

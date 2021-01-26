@@ -1,15 +1,29 @@
 # hashlife
 
 Rust implementation of [HashLife](https://en.wikipedia.org/wiki/Hashlife). This
-project includes an implementation of HashLife and a front-end.
+project includes an implementation of HashLife and a front-end powered by WebAssembly.
 
 # Dependencies
 
-The front-end requires `wasm-pack`, run the following command to install it
+The front-end requires Nodejs and NPM.
+
+To build this project with ease, you'll need [cargo-make](https://github.com/sagiegurari/cargo-make).
+
+# Build
+
+First run
 
 ```shell
-cargo install wasm-pack
+cargo make setup
 ```
+
+to install dependencies for the front-end part. Then run
+
+```shell
+cargo make build
+```
+
+to build the project.
 
 # References
 

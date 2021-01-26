@@ -1,4 +1,29 @@
+[tasks.setup]
+workspace = false
+dependencies = [
+  { name = "setup", path = "frontend" }
+]
+
 [tasks.build]
+clear = true
+workspace = false
 dependencies = [
   { name = "build", path = "frontend" }
+]
+
+[tasks.serve]
+workspace = false
+script_runner = "@shell"
+script.pre = "cd frontend"
+script.main = "npm start"
+script.post = "cd .."
+
+[tasks.clean]
+clear = true
+workspace = false
+command = "cargo"
+args = ["clean"]
+dependencies = [
+  { name = "clean", path = "frontend" },
+  { name = "clean", path = "wasm-binding" }
 ]

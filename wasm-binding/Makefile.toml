@@ -1,4 +1,12 @@
 [tasks.build]
+clear = true
 install_crate = "wasm-pack"
 command = "wasm-pack"
 args = ["build"]
+
+[tasks.clean]
+clear = true
+script_runner = "@shell"
+script = '''
+rm -rf pkg
+'''
