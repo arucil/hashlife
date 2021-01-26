@@ -6,8 +6,12 @@ use crate::universe::*;
 /// RLE format: <https://www.conwaylife.com/wiki/Run_Length_Encoded>.
 pub fn read(
   src: impl AsRef<str>,
-) -> Universe {
+) -> Result<Universe, String> {
   let mut src = src.as_ref();
+  if src.is_empty() {
+    return Err("empty".to_owned());
+  }
+
   let header = src.lines().next().unwrap()
     .split(",")
     .map(|s| s.trim());
@@ -18,24 +22,24 @@ pub fn read(
   for w in header {
     let kv = w.split("=").map(|s| s.trim()).collect::<Vec<_>>();
     if kv.len() != 2 {
-      panic!("invalid header line");
+      return Err("invalid header line".to_owned());
     }
     match &kv[0][..] {
       "x" => {
-        width = Some(kv[1].parse().expect("invalid x"));
+        width = Some(kv[1].parse().map_err(|_| "invalid x".to_owned())?);
       }
       "y" => {
-        height = Some(kv[1].parse().expect("invalid y"));
+        height = Some(kv[1].parse().map_err(|_| "invalid y".to_owned())?);
       }
       "rule" => {
-        rule = Some(parse_rule(&kv[1]).expect("invalid header line"));
+        rule = Some(parse_rule(&kv[1]).ok_or_else(|| "invalid header line".to_owned())?);
       }
       _ => {}
     }
   }
 
-  let _width = width.expect("missing x in header line");
-  let _height = height.expect("missing y in header line");
+  let _width = width.ok_or_else(|| "missing x in header line".to_owned())?;
+  let _height = height.ok_or_else(|| "missing y in header line".to_owned())?;
   let rule = rule.unwrap_or(GAME_OF_LIFE);
 
   let mut uni = Universe::new(rule);
@@ -47,7 +51,7 @@ pub fn read(
     src = src.trim_start();
 
     if src.is_empty() {
-      panic!("unexpected EOF");
+      return Err("unexpected EOF".to_owned());
     }
 
     let b0 = src.as_bytes()[0];
@@ -75,9 +79,9 @@ pub fn read(
           for i in 0..num {
             uni.set(x + i, y, true);
           }
-        x += num;
+          x += num;
         } else {
-          panic!("invalid character {:?}", src.chars().next().unwrap());
+          return Err(format!("invalid character {:?}", src.chars().next().unwrap()));
         }
       }
     }
@@ -85,7 +89,7 @@ pub fn read(
     src = &src[1..];
   }
 
-  uni
+  Ok(uni)
 }
 
 fn parse_rule(s: &str) -> Option<Rule> {
@@ -235,7 +239,7 @@ x = 3, y = 3
 bo$2bo$3o!
 ".trim();
 
-    let uni = read(src.to_owned());
+    let uni = read(src.to_owned()).unwrap();
     assert_eq!(uni.debug_root(), vec![
       0b_0000_0000,
       0b_0000_0000,

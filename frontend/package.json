@@ -9,6 +9,7 @@
   "devDependencies": {
     "copy-webpack-plugin": "^5.0.0",
     "hashlife-wasm": "file:../wasm-binding/pkg",
+    "raw-loader": "^4.0.2",
     "ts-loader": "^8.0.14",
     "typescript": "^4.1.3",
     "webpack": "^4.29.3",

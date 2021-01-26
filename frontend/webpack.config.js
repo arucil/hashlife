@@ -5,14 +5,18 @@ module.exports = {
   entry: "./src/bootstrap.ts",
   output: {
     path: path.resolve(__dirname, "dist"),
-    filename: "bootstrap.js",
+    filename: "index.js",
   },
   module: {
     rules: [
       {
         test: /\.ts$/,
-        use: 'ts-loader',
+        loader: 'ts-loader',
         exclude: /node_modules/,
+      },
+      {
+        test: /\.lif$/,
+        use: 'raw-loader',
       }
     ]
   },

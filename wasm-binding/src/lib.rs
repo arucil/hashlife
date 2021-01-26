@@ -11,8 +11,8 @@ impl Universe {
     Self(universe::Universe::new(rule::GAME_OF_LIFE))
   }
 
-  pub fn read(rle: &str) -> Self {
-    Self(rle::read(rle))
+  pub fn read(rle: &str) -> Result<Universe, JsValue> {
+    Ok(Self(rle::read(rle)?))
   }
 
   pub fn set(&mut self, x: i32, y: i32, alive: bool) {
@@ -28,7 +28,7 @@ impl Universe {
     export::write_cells(&self.0, move |cell| {
       let b = (cell.nw as u64) << 48 | (cell.ne as u64) << 32
         | (cell.sw as u64) << 16
-        | (cell.sw as u64);
+        | (cell.se as u64);
       let b = unsafe { std::mem::transmute::<_, f64>(b) };
       let x = cell.x as i32;
       let y = cell.y as f32;
