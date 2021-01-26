@@ -16,7 +16,10 @@
         justify-content: center;
       }
       #universe {
+        width: 600px;
+        height: 480px;
         border: solid 1px lightgray;
+        image-rendering: pixelated;
       }
       .control-bar {
         margin-bottom: 20px;
@@ -35,7 +38,7 @@
         <option value="breeder">Breeder</option>
       </select>
     </div>
-    <canvas id="universe" width=600 height=480></canvas>
+    <canvas id="universe"></canvas>
     <script src="./index.js"></script>
   </body>
 </html>

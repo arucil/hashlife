@@ -1,64 +1,43 @@
 import { Universe } from "hashlife-wasm"
-import breeder from "./patterns/Breeder.lif"
+import Patterns from "./patterns"
+import render from "./render"
 
-const universeCanvas = document.querySelector('#universe') as HTMLCanvasElement
-const universePattern = document.querySelector('#universe-pattern') as HTMLSelectElement
+const univCanvas = document.querySelector('#universe') as HTMLCanvasElement
+const univPattern = document.querySelector('#universe-pattern') as HTMLSelectElement
+
+univCanvas.width = 600
+univCanvas.height = 480
 
 let universe: Universe | null = null
-
-
-const Patterns: { [key: string]: string } = {
-  empty: `x = 1, y = 1
-!
-`,
-  glider: `x = 3, y = 3
-bo$2bo$3o!
-`,
-  r: `x = 3, y = 3
-b2o$2o$bo!
-`,
-  breeder,
-}
+let scale = 1
 
 function loadPattern(patternRle: string) {
-  if (universe !== null) {
-    universe.free()
-  }
 
   try {
-    universe = Universe.read(patternRle)
+    const newUniverse = Universe.read(patternRle)
+    if (universe !== null) {
+      universe.free()
+    }
+    universe = newUniverse
   } catch (e) {
     console.error(e)
     alert('invalid RLE format!')
+    return
   }
 
-  render(0, 0, universeCanvas.getContext('2d') as any)
+  render(universe, univCanvas.getContext('2d') as any, univCanvas.width, univCanvas.height)
 }
 
-universePattern.addEventListener('change', _event => {
-  loadPattern(Patterns[universePattern.value])
+function setScale(newScale: number) {
+  scale = newScale
+  univCanvas.width = univCanvas.scrollWidth / scale
+  univCanvas.height = univCanvas.scrollHeight / scale
+}
+
+univPattern.addEventListener('change', _event => {
+  loadPattern(Patterns[univPattern.value])
 })
 
-function render(
-  width: number,
-  height: number,
-  ctx: CanvasRenderingContext2D,
-) {
-  ctx.translate(-(width / 2 | 0), -(height / 2 | 0))
+setScale(1)
+loadPattern(Patterns[univPattern.value])
 
-  universe!.write_cells((x: number, y: number, cell: number) => {
-    const u8arr = doubleToU8Array(cell)
-    const nw = u8arr[0] << 8 | u8arr[1]
-    const ne = u8arr[2] << 8 | u8arr[3]
-    const sw = u8arr[4] << 8 | u8arr[5]
-    const se = u8arr[6] << 8 | u8arr[7]
-    console.log(nw, ne, sw, se)
-  })
-}
-
-function doubleToU8Array(x: number): Uint8Array {
-  const arr = new ArrayBuffer(8)
-  const darr = new Float64Array(arr)
-  darr[0] = x
-  return new Uint8Array(arr).reverse()
-}
