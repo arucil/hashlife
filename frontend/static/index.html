@@ -21,8 +21,14 @@
         border: solid 1px lightgray;
         image-rendering: pixelated;
       }
+      #zoom-input {
+        width: 240px;
+      }
       .control-bar {
         margin-bottom: 20px;
+      }
+      .action {
+        margin: 10px;
       }
     </style>
   </head>
@@ -37,6 +43,16 @@
         <option value="r">R-pentomino</option>
         <option value="breeder">Breeder</option>
       </select>
+      &nbsp;&nbsp;
+      Zoom:
+      <input id="zoom-input" type="range" min=-40 max=40 step=1/>
+      <span id="zoom-label"></span>
+      <br/>
+      Step: <input id="step-input" type="number" min=1 max=16777216 step=1/>
+      <button id="reset" class="action">Reset</button>
+      <button id="evolve" class="action">Evolve</button>
+      <br/>
+      Generation: <span id="generation-label"></span>
     </div>
     <canvas id="universe"></canvas>
     <script src="./index.js"></script>

@@ -194,12 +194,12 @@ impl LeafNodeKey {
   }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_pointer_width = "32")]
 pub(crate) fn node_ref(NodeId(n): NodeId) -> &'static Node {
   unsafe { std::mem::transmute(n as u32) }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_pointer_width = "64")]
 pub(crate) fn node_ref(NodeId(n): NodeId) -> &'static Node {
   unsafe { std::mem::transmute(n) }
 }
