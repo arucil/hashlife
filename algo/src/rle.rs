@@ -128,7 +128,7 @@ fn parse_rule(s: &str) -> Option<Rule> {
 pub fn write(
   univ: &Universe,
 ) -> String {
-  let (left, top, right, bottom) = univ.boundary();
+  let Boundary {left, top, right, bottom} = univ.boundary();
   let width = (right - left) as u32;
   let mut output = format!("x = {}, y = {}, rule = {}\n",
     width, bottom - top, univ.rule());

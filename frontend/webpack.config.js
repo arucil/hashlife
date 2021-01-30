@@ -15,7 +15,7 @@ module.exports = {
         exclude: /node_modules/,
       },
       {
-        test: /\.lif$/,
+        test: /\.rle$/,
         use: 'raw-loader',
       }
     ]

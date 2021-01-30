@@ -1,4 +1,4 @@
-use algo::universe::Universe;
+use algo::universe::{Universe, Boundary};
 use algo::export;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
@@ -14,7 +14,7 @@ pub fn save_image(uni: &Universe, path: impl AsRef<Path>) {
     .open(path)
     .unwrap();
 
-  let (left, top, right, bottom) = uni.boundary();
+  let Boundary {left, top, right, bottom} = uni.boundary();
   let w = right - left;
   let h = bottom - top;
 

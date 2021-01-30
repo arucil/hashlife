@@ -1,0 +1,3 @@
+- [ ] move gc invocation in find_node
+- [x] fix clear_results
+- [ ] optimize rendering efficiency

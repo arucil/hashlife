@@ -1,5 +1,6 @@
 use wasm_bindgen::prelude::*;
 use algo::*;
+use algo::universe::Boundary;
 
 #[wasm_bindgen]
 pub struct Universe(universe::Universe);
@@ -23,17 +24,40 @@ impl Universe {
     self.0.simulate(num_gen)
   }
 
-  pub fn write_cells(&self, f: &js_sys::Function) {
+  pub fn write_cells(&self, viewport: &Viewport, f: &js_sys::Function) {
     let null = JsValue::null();
-    export::write_cells(&self.0, move |cell| {
-      let b = (cell.nw as u64) << 48 | (cell.ne as u64) << 32
+    let viewport = Boundary {
+      left: viewport.left as i64,
+      top: viewport.top as i64,
+      right: viewport.right as i64,
+      bottom: viewport.bottom as i64,
+    };
+    export::write_cells(&self.0, &viewport, move |cell| {
+      let b = (cell.nw as u64) << 48
+        | (cell.ne as u64) << 32
         | (cell.sw as u64) << 16
         | (cell.se as u64);
       let b = unsafe { std::mem::transmute::<_, f64>(b) };
       let x = cell.x as i32;
-      let y = cell.y as f32;
+      let y = cell.y as i32;
       f.call3(&null, &JsValue::from(x), &JsValue::from(y), &JsValue::from(b))
         .unwrap();
     })
+  }
+}
+
+#[wasm_bindgen]
+pub struct Viewport {
+  pub left: i32,
+  pub top: i32,
+  pub right: i32,
+  pub bottom: i32,
+}
+
+#[wasm_bindgen]
+impl Viewport {
+  #[wasm_bindgen(constructor)]
+  pub fn new(left: i32, top: i32, width: u32, height: u32) -> Self {
+    Self { left, top, right: left + width as i32, bottom: top + height as i32 }
   }
 }

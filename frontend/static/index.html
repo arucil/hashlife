@@ -16,19 +16,19 @@
         justify-content: center;
       }
       #universe {
-        width: 600px;
-        height: 480px;
+        width: 800px;
+        height: 600px;
         border: solid 1px lightgray;
         image-rendering: pixelated;
       }
       #zoom-input {
-        width: 240px;
+        width: 320px;
       }
       .control-bar {
         margin-bottom: 20px;
       }
       .action {
-        margin: 10px;
+        margin: 15px 0 15px 20px;
       }
     </style>
   </head>
@@ -38,19 +38,27 @@
     <div class="control-bar">
       Pattern:
       <select id="universe-pattern">
-        <option value="empty">Empty</option>
-        <option value="glider">Glider</option>
-        <option value="r">R-pentomino</option>
-        <option value="breeder">Breeder</option>
       </select>
       &nbsp;&nbsp;
       Zoom:
-      <input id="zoom-input" type="range" min=-40 max=40 step=1/>
+      <input id="zoom-input" type="range" min=-40 max=40 step=1 list="zoom-list"/>
+      <datalist id="zoom-list">
+        <option>-40</option>
+        <option>-30</option>
+        <option>-20</option>
+        <option>-10</option>
+        <option>0</option>
+        <option>10</option>
+        <option>20</option>
+        <option>30</option>
+        <option>40</option>
+    </datalist>
       <span id="zoom-label"></span>
       <br/>
       Step: <input id="step-input" type="number" min=1 max=16777216 step=1/>
       <button id="reset" class="action">Reset</button>
       <button id="evolve" class="action">Evolve</button>
+      <button id="reset-coord" class="action">Reset coordinate</button>
       <br/>
       Generation: <span id="generation-label"></span>
     </div>

@@ -1,16 +1,15 @@
-import breeder from "./Breeder.lif"
+import Breeder from "./Breeder.rle"
+import ThreeEngineCordership from "./3enginecordership.rle"
 
 const Patterns: { [key: string]: string } = {
-  empty: `x = 1, y = 1
-!
-`,
-  glider: `x = 3, y = 3
+  Glider: `x = 3, y = 3
 bo$2bo$3o!
 `,
-  r: `x = 3, y = 3
+  'R-Pentomino': `x = 3, y = 3
 b2o$2o$bo!
 `,
-  breeder,
+  Breeder,
+  '3-engine Cordership': ThreeEngineCordership,
 }
 
 export default Patterns

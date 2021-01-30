@@ -15,6 +15,7 @@ pub struct Universe {
   /// ```
   level2_results: [u8; 65536],
   rule: Rule,
+  last_k: Option<u16>,
   gc_roots: Vec<NodeId>,
   gc_threshold: usize,
 }
@@ -32,6 +33,7 @@ impl Universe {
       empty_nodes: vec![INVALID_NODE_ID; 4],
       level2_results,
       rule,
+      last_k: None,
       gc_roots: vec![],
       gc_threshold: INITIAL_GC_THRESHOLD,
     };
@@ -53,15 +55,18 @@ impl Universe {
 
   /// `num_gen` is number of generations.
   pub fn simulate(&mut self, mut num_gen: usize) {
-    self.gc();
-
     if num_gen == 0 {
       return;
     }
 
-    let mut k = num_gen.trailing_zeros() as u16;
-
     loop {
+      let k = num_gen.trailing_zeros() as u16;
+      self.clear_results(k);
+
+      if self.set.len() >= self.gc_threshold {
+        self.gc();
+      }
+
       // preserve enough empty space
       self.expand();
       self.expand();
@@ -78,17 +83,11 @@ impl Universe {
 
       self.shrink();
 
+      self.last_k = Some(k);
+
       if num_gen == 0 {
         break;
       }
-
-      if self.set.len() >= self.gc_threshold {
-        self.gc();
-      }
-
-      let old_k = k;
-      k = num_gen.trailing_zeros() as u16;
-      self.clear_results(old_k, k);
     }
   }
 
@@ -317,12 +316,15 @@ impl Universe {
     }
   }
 
-  /// `new_k` > `k`
-  fn clear_results(&self, k: u16, new_k: u16) {
-    for node in &self.set {
-      let level = node.level();
-      if level >= 4 && k < level - 2 && level - 2 <= new_k {
-        node.unwrap_internal_ref().result.set(INVALID_NODE_ID);
+  fn clear_results(&self, k: u16) {
+    if let Some(last_k) = self.last_k {
+      let min_k = last_k.min(k);
+
+      for node in &self.set {
+        let level = node.level();
+        if level >= 4 && min_k < level - 2 {
+          node.unwrap_internal_ref().result.set(INVALID_NODE_ID);
+        }
       }
     }
   }
@@ -621,7 +623,12 @@ impl Universe {
             s >> 9 & 0x8 | s >> 6 & 0x4 | s >> 3 & 0x2 | s & 0x1;
           let (top, bottom) = BYTE_RANGE[col as usize];
 
-          (left + ox, top + oy, right + ox, bottom + oy)
+          Boundary {
+            left: left + ox,
+            top: top + oy,
+            right: right + ox,
+            bottom: bottom + oy,
+          }
         }
         Node::Internal(InternalNode { key, .. }) => {
           let r = 1 << level - 2;
@@ -629,24 +636,39 @@ impl Universe {
           let ne_bound = self.boundary_rec(key.ne, ox + r, oy - r);
           let sw_bound = self.boundary_rec(key.sw, ox - r, oy + r);
           let se_bound = self.boundary_rec(key.se, ox + r, oy + r);
-          let left = nw_bound.0.min(ne_bound.0).min(sw_bound.0).min(se_bound.0);
-          let right = nw_bound.2.max(ne_bound.2).max(sw_bound.2).max(se_bound.2);
-          let top = nw_bound.1.min(ne_bound.1).min(sw_bound.1).min(se_bound.1);
-          let bottom = nw_bound.3.max(ne_bound.3).max(sw_bound.3).max(se_bound.3);
-          (left, top, right, bottom)
+          let left = nw_bound.left.min(ne_bound.left)
+            .min(sw_bound.left)
+            .min(se_bound.left);
+          let right = nw_bound.right.max(ne_bound.right)
+            .max(sw_bound.right)
+            .max(se_bound.right);
+          let top = nw_bound.top.min(ne_bound.top)
+            .min(sw_bound.top)
+            .min(se_bound.top);
+          let bottom = nw_bound.bottom.max(ne_bound.bottom)
+            .max(sw_bound.bottom)
+            .max(se_bound.bottom);
+          Boundary { left, top, right, bottom }
         }
       }
     }
   }
 
-  pub(crate) fn write_cells<F>(&self, mut f: F)
+  pub(crate) fn write_cells<F>(&self, viewport: &Boundary, mut f: F)
   where
     F: FnMut(u16, u16, u16, u16, i64, i64)
   {
-    self.write_cells_rec(self.root, 0, 0, &mut f);
+    self.write_cells_rec(self.root, viewport, 0, 0, &mut f);
   }
 
-  fn write_cells_rec<F>(&self, node: NodeId, ox: i64, oy: i64, f: &mut F)
+  fn write_cells_rec<F>(
+    &self,
+    node: NodeId,
+    viewport: &Boundary,
+    ox: i64,
+    oy: i64,
+    f: &mut F,
+  )
   where
     F: FnMut(u16, u16, u16, u16, i64, i64)
   {
@@ -657,18 +679,29 @@ impl Universe {
       return;
     }
 
+    let r = 1 << level - 1;
+    let left = ox - r;
+    let top = oy - r;
+    let right = ox + r;
+    let bottom = oy + r;
+    if right <= viewport.left
+      || left >= viewport.right
+      || top >= viewport.bottom
+      || bottom <= viewport.top
+    {
+      return;
+    }
+
     match node_ref(node) {
       Node::Leaf(node) => {
-        let left = ox - 4;
-        let top = oy - 4;
         f(node.key.nw, node.key.ne, node.key.sw, node.key.se, left, top);
       }
       Node::Internal(node) => {
-        let r = 1 << level - 2;
-        self.write_cells_rec(node.key.nw, ox - r, oy - r, f);
-        self.write_cells_rec(node.key.ne, ox + r, oy - r, f);
-        self.write_cells_rec(node.key.sw, ox - r, oy + r, f);
-        self.write_cells_rec(node.key.se, ox + r, oy + r, f);
+        let rr = r >> 1;
+        self.write_cells_rec(node.key.nw, viewport, ox - rr, oy - rr, f);
+        self.write_cells_rec(node.key.ne, viewport, ox + rr, oy - rr, f);
+        self.write_cells_rec(node.key.sw, viewport, ox - rr, oy + rr, f);
+        self.write_cells_rec(node.key.se, viewport, ox + rr, oy + rr, f);
       }
     }
   }
@@ -710,9 +743,22 @@ impl Universe {
   }
 }
 
-pub type Boundary = (i64, i64, i64, i64);
+#[derive(PartialEq, Eq, Debug)]
+pub struct Boundary {
+  pub left: i64,
+  pub top: i64,
+  /// exclusive
+  pub right: i64,
+  /// exclusive
+  pub bottom: i64,
+}
 
-const EMPTY_BOUNDARY: Boundary = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+const EMPTY_BOUNDARY: Boundary = Boundary {
+  left: i64::MAX,
+  top: i64::MAX,
+  right: i64::MIN,
+  bottom: i64::MIN,
+};
 
 const BYTE_RANGE: [(i64, i64); 256] = compute_byte_range();
 
@@ -795,7 +841,12 @@ mod tests {
     uni.set(-2, 0, true);
     uni.set(-1, 0, true);
     uni.set(-1, 2, true);
-    assert_eq!(uni.boundary(), (-3, -2, 1, 3));
+    assert_eq!(uni.boundary(), Boundary {
+      left: -3,
+      top: -2,
+      right: 1,
+      bottom: 3,
+    });
   }
 
   #[test]
@@ -809,7 +860,12 @@ mod tests {
     uni.set(2, 1, true);
     uni.set(-1, 0, true);
     uni.set(-1, 2, true);
-    assert_eq!(uni.boundary(), (-6, -2, 5, 4));
+    assert_eq!(uni.boundary(), Boundary {
+      left: -6,
+      top: -2,
+      right: 5,
+      bottom: 4,
+    });
   }
 
   #[test]

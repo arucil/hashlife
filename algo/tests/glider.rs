@@ -7,15 +7,23 @@ fn multi_simulate() {
   let glider_3 = "x = 3, y = 3, rule = B3/S23\no$b2o$2o!\n";
   let mut uni = algo::rle::read(glider_0).unwrap();
 
-  uni.simulate(170);
-
-  let actual = algo::rle::write(&uni);
-
-  assert_eq!(glider_2, &actual);
-
-  uni.simulate(1);
-
+  uni.simulate(39);
   let actual = algo::rle::write(&uni);
 
   assert_eq!(glider_3, &actual);
+
+  uni.simulate(1);
+  let actual = algo::rle::write(&uni);
+
+  assert_eq!(glider_0, &actual);
+
+  uni.simulate(1);
+  let actual = algo::rle::write(&uni);
+
+  assert_eq!(glider_1, &actual);
+
+  uni.simulate(1);
+  let actual = algo::rle::write(&uni);
+
+  assert_eq!(glider_2, &actual);
 }

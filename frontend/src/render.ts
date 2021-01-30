@@ -1,7 +1,14 @@
-import { Universe } from "hashlife-wasm"
+import { Universe, Viewport } from "hashlife-wasm"
 import * as util from "./util"
 
-function render(
+export let transX = 0, transY = 0
+
+export function setTranslate(x: number, y: number) {
+  transX = x | 0
+  transY = y | 0
+}
+
+export function render(
   universe: Universe,
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -9,11 +16,12 @@ function render(
 ) {
   ctx.fillStyle = 'white'
   ctx.fillRect(0, 0, width, height)
-  ctx.translate(width >> 1, height >> 1)
+  ctx.translate(transX, transY)
 
   ctx.beginPath()
   ctx.fillStyle = 'black'
-  universe!.write_cells((x: number, y: number, cell: number) => {
+  const viewport = new Viewport(-transX, -transY, width, height)
+  universe!.write_cells(viewport, (x: number, y: number, cell: number) => {
     const u8arr = util.doubleToU8Array(cell)
     const nw = u8arr[0] << 8 | u8arr[1]
     const ne = u8arr[2] << 8 | u8arr[3]
@@ -27,7 +35,7 @@ function render(
 
   ctx.stroke()
 
-  ctx.translate(-(width >> 1), -(height >> 1))
+  ctx.translate(-transX, -transY)
 }
 
 function renderQuadrant(
@@ -42,5 +50,3 @@ function renderQuadrant(
     }
   }
 }
-
-export default render

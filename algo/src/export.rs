@@ -1,7 +1,7 @@
 use crate::universe::*;
 
 pub fn write_buffer(uni: &Universe) -> Vec<Vec<u8>> {
-  let (left, top, right, bottom) = uni.boundary();
+  let viewport@Boundary {left, top, right, bottom} = uni.boundary();
   if right <= left {
     panic!("empty");
   }
@@ -13,7 +13,7 @@ pub fn write_buffer(uni: &Universe) -> Vec<Vec<u8>> {
   let mut buffer = vec![vec![0u8; bw as usize]; h];
   let shift = (if level == 3 { left + 4 } else { left }).rem_euclid(8);
 
-  uni.write_cells(|nw, ne, sw, se, x0, y0| {
+  uni.write_cells(&viewport, |nw, ne, sw, se, x0, y0| {
     let bytes = [
       (nw >> 8 & 0xf0 | ne >> 12 & 0xf) as u8,
       (nw >> 4 & 0xf0 | ne >> 8 & 0xf) as u8,
@@ -63,9 +63,10 @@ pub struct CellData {
 
 pub fn write_cells(
   univ: &Universe,
+  viewport: &Boundary,
   mut f: impl FnMut(CellData),
 ) {
-  univ.write_cells(|nw, ne, sw, se, x, y| {
+  univ.write_cells(viewport, |nw, ne, sw, se, x, y| {
     f(CellData { nw, ne, sw, se, x, y })
   })
 }
