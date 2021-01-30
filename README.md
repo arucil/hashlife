@@ -3,6 +3,8 @@
 Rust implementation of [HashLife](https://en.wikipedia.org/wiki/Hashlife). This
 project includes an implementation of HashLife and a front-end powered by WebAssembly.
 
+[Run HashLife online!](https://arucil.github.io/games/HashLife/index.html)
+
 # Dependencies
 
 The front-end requires Nodejs and NPM.
